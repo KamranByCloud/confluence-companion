@@ -83,3 +83,13 @@ describe("loadDotEnvIfPresent", () => {
     assert.doesNotThrow(() => loadDotEnvIfPresent("does/not/exist.env"));
   });
 });
+
+describe("packageEnvPath", () => {
+  it("resolves .env next to the package, not the working directory", async () => {
+    const { packageEnvPath } = await import("../dist/config.js");
+    const path = packageEnvPath();
+    assert.ok(path.startsWith("/"), `expected an absolute path, got ${path}`);
+    assert.ok(path.endsWith("/.env"), path);
+    assert.ok(!path.includes("/dist/"), `must point beside the package, got ${path}`);
+  });
+});

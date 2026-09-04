@@ -1,3 +1,5 @@
+import { fileURLToPath } from "node:url";
+
 /**
  * Configuration comes from environment variables only. The MCP client passes
  * them through its server definition; for local runs a .env file next to the
@@ -15,10 +17,21 @@ export interface Config {
 export class ConfigError extends Error {}
 
 /**
+ * Path to the .env shipped next to the installed package.
+ *
+ * Resolved from this module rather than the working directory: an MCP client
+ * starts the server from wherever it happens to be, so a relative ".env" would
+ * be found or missed depending on how it was launched.
+ */
+export function packageEnvPath(): string {
+  return fileURLToPath(new URL("../.env", import.meta.url));
+}
+
+/**
  * Loads a .env file if present. Missing files are ignored so that a client
  * supplying real environment variables does not need one.
  */
-export function loadDotEnvIfPresent(path = ".env"): void {
+export function loadDotEnvIfPresent(path = packageEnvPath()): void {
   try {
     process.loadEnvFile(path);
   } catch {

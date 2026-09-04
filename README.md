@@ -42,6 +42,19 @@ site REST API.
 
 ## MCP client configuration
 
+Credentials are read from the `.env` next to the installed package, resolved
+from the server module rather than the working directory. A client can start the
+server from anywhere without the token being written into client configuration.
+
+For Claude Code:
+
+```bash
+claude mcp add -s user confluence-companion -- node /absolute/path/to/confluence-companion/dist/index.js
+```
+
+Any client that supports stdio servers can be configured directly. Environment
+variables, if given, take precedence over the `.env`:
+
 ```json
 {
   "mcpServers": {
@@ -116,9 +129,14 @@ loading.
 server as a real MCP client. It writes to the page you give it, so point it at
 a scratch page, never at a real one.
 
+The server runs from `dist/`, so run `npm run build` after changing the source
+for a client to pick the change up.
+
 ## Status
 
-Working append tool with tests against a live page. Architecture decisions, research, and verified API details are
+Working append tool, registered and connected as a stdio MCP server, with unit
+tests and live checks. Packaging and distribution are not addressed yet: the
+server currently runs from a local checkout. Architecture decisions, research, and verified API details are
 kept in local working notes that are not part of this repository, because they
 contain site-specific configuration.
 
