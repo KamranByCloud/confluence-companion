@@ -78,6 +78,21 @@ silently rewrites it, so invalid input would otherwise corrupt the page.
 Only Confluence Storage format is supported. Atlassian Document Format is not
 yet verified and is therefore not offered.
 
+## Tests
+
+```bash
+npm test          # builds, then runs the unit tests
+```
+
+The unit tests use the built-in Node test runner and make no network calls;
+HTTP is stubbed. They cover storage validation, the append read-modify-write,
+request shaping, error mapping, version-conflict translation, and configuration
+loading.
+
+`npm run smoke -- <page-id>` is a separate end-to-end check that drives the
+server as a real MCP client. It writes to the page you give it, so point it at
+a scratch page, never at a real one.
+
 ## Status
 
 Working append tool with tests against a live page. Architecture decisions, research, and verified API details are
