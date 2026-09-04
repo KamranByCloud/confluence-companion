@@ -64,7 +64,7 @@ site REST API.
 | --- | --- | --- |
 | `page_id` | yes | Numeric page ID. |
 | `content` | yes | Confluence Storage format markup to append. |
-| `representation` | no | Only `storage` is accepted. |
+| `representation` | no | `storage` (default) or `atlas_doc_format`. |
 | `version_message` | no | Message recorded in the page version history. |
 
 The tool reads the current body and version, appends, and writes the full body
@@ -75,8 +75,31 @@ Content is validated as well-formed XHTML before any write. This is not
 cosmetic: Confluence accepts malformed storage markup with HTTP 200 and
 silently rewrites it, so invalid input would otherwise corrupt the page.
 
-Only Confluence Storage format is supported. Atlassian Document Format is not
-yet verified and is therefore not offered.
+### Choosing a representation
+
+Prefer `storage`, and pass Confluence Storage XHTML as `content`.
+
+`atlas_doc_format` is supported: pass JSON, either a whole `doc`, an array of
+nodes, or a single node. The tool appends the nodes to the document's `content`
+array and leaves every other document field alone.
+
+The page is always read and written in the same representation, because
+crossing formats rewrites parts of the page nobody asked to change. Measured on
+a page authored in storage format:
+
+| Write path | Effect on untouched markup |
+| --- | --- |
+| storage, unchanged content | byte identical |
+| through `atlas_doc_format` | table cells wrapped in `<p>`, `data-layout` added |
+
+The Confluence API does not report which representation a page was authored in,
+so the tool cannot pick for you. Use `atlas_doc_format` only for a page you know
+was authored that way.
+
+One further effect is unavoidable even without crossing formats: macros that
+map onto native ADF nodes, such as the info panel, get a fresh `ac:macro-id` on
+every ADF write, because the ADF node carries no macro ID. Macros represented as
+ADF extensions, such as `toc`, keep theirs.
 
 ## Tests
 

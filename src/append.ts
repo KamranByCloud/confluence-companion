@@ -2,12 +2,12 @@ import { XMLValidator } from "fast-xml-parser";
 
 import { ConfluenceClient, type Page } from "./confluence.js";
 
-/**
- * Only Confluence Storage format is supported so far. Atlassian Document Format
- * round trips are not verified, and claiming support without verifying it risks
- * corrupting page content.
- */
-export const SUPPORTED_REPRESENTATION = "storage";
+export const STORAGE = "storage";
+export const ADF = "atlas_doc_format";
+
+/** Body representations this server can append to safely. */
+export const SUPPORTED_REPRESENTATIONS = [STORAGE, ADF] as const;
+export type Representation = (typeof SUPPORTED_REPRESENTATIONS)[number];
 
 export const DEFAULT_VERSION_MESSAGE = "Appended content through Confluence Companion";
 
@@ -15,6 +15,7 @@ export interface AppendResult {
   readonly page: Page;
   readonly previousVersion: number;
   readonly appendedChars: number;
+  readonly appendedNodes: number | undefined;
 }
 
 export class ContentValidationError extends Error {}
@@ -23,7 +24,7 @@ export class ContentValidationError extends Error {}
 const VOID_ELEMENTS = ["br", "hr", "img", "input", "meta", "link", "col", "area", "source"];
 
 /**
- * Rejects content that is not well-formed XHTML.
+ * Rejects storage content that is not well-formed XHTML.
  *
  * This matters more than it looks: Confluence does NOT reject malformed storage
  * markup. Verified on 2026-09-04, sending the unclosed fragment
@@ -52,8 +53,11 @@ export function validateStorageContent(content: string): void {
     .replace(/<\/root/g, "<end of content")
     .replace(/closing tag 'root'/g, "end of content")
     .replace(/\.$/, "");
-  const voidHint = VOID_ELEMENTS.find((tag) =>
-    new RegExp(`<${tag}(\\s[^>]*)?>`, "i").test(content) && !new RegExp(`<${tag}[^>]*/>`, "i").test(content),
+
+  const voidHint = VOID_ELEMENTS.find(
+    (tag) =>
+      new RegExp(`<${tag}(\\s[^>]*)?>`, "i").test(content) &&
+      !new RegExp(`<${tag}[^>]*/>`, "i").test(content),
   );
   throw new ContentValidationError(
     `content is not well-formed Confluence Storage format: ${detail}` +
@@ -64,27 +68,127 @@ export function validateStorageContent(content: string): void {
   );
 }
 
+/** An ADF node. Only the discriminator is needed; the rest is passed through. */
+interface AdfNode {
+  type: string;
+  content?: unknown;
+}
+
+interface AdfDoc extends AdfNode {
+  type: "doc";
+  version?: number;
+  content?: AdfNode[];
+}
+
+function isAdfNode(value: unknown): value is AdfNode {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    typeof (value as { type?: unknown }).type === "string" &&
+    (value as { type: string }).type.length > 0
+  );
+}
+
+/**
+ * Parses an ADF fragment into the nodes to append. Accepts a whole `doc`, a
+ * bare array of nodes, or a single node, because all three are natural things
+ * for a caller to produce.
+ */
+export function parseAdfContent(content: string): AdfNode[] {
+  if (!content.trim()) {
+    throw new ContentValidationError("content must not be empty or whitespace only.");
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch (cause) {
+    throw new ContentValidationError(
+      `content is not valid JSON, which Atlassian Document Format requires: ` +
+        `${cause instanceof Error ? cause.message : String(cause)}`,
+    );
+  }
+
+  const nodes: unknown[] = Array.isArray(parsed)
+    ? parsed
+    : isAdfNode(parsed) && parsed.type === "doc"
+      ? ((parsed as AdfDoc).content ?? [])
+      : [parsed];
+
+  if (nodes.length === 0) {
+    throw new ContentValidationError("content contains no Atlassian Document Format nodes.");
+  }
+  for (const [index, node] of nodes.entries()) {
+    if (!isAdfNode(node)) {
+      throw new ContentValidationError(
+        `Atlassian Document Format node at position ${index} is not an object with a ` +
+          `non-empty "type" field.`,
+      );
+    }
+  }
+  return nodes as AdfNode[];
+}
+
+/** Appends nodes to an existing ADF document, leaving every other field alone. */
+function appendToAdfDocument(currentBody: string, nodes: AdfNode[]): string {
+  let doc: unknown;
+  try {
+    doc = JSON.parse(currentBody);
+  } catch (cause) {
+    throw new Error(
+      `The page's existing Atlassian Document Format body is not valid JSON, so it cannot ` +
+        `be appended to safely: ${cause instanceof Error ? cause.message : String(cause)}`,
+    );
+  }
+  if (!isAdfNode(doc) || doc.type !== "doc") {
+    throw new Error(`The page's existing body is not an Atlassian Document Format document.`);
+  }
+  const existing = Array.isArray(doc.content) ? (doc.content as AdfNode[]) : [];
+  return JSON.stringify({ ...doc, content: [...existing, ...nodes] });
+}
+
 /**
  * Appends to a page as a controlled read-modify-write. The Confluence API has
  * no server-side append, and it enforces optimistic locking on version.number,
  * so a concurrent edit surfaces as a conflict instead of being overwritten.
+ *
+ * The page is read and written in the same representation. Crossing formats is
+ * not offered: verified on 2026-09-04, writing a storage-authored page through
+ * atlas_doc_format normalizes untouched markup, wrapping table cells in
+ * paragraphs and adding layout attributes, while a storage write of unchanged
+ * content is byte identical.
  */
 export async function appendPageContent(
   client: ConfluenceClient,
-  args: { pageId: string; content: string; versionMessage?: string | undefined },
+  args: {
+    pageId: string;
+    content: string;
+    representation?: Representation | undefined;
+    versionMessage?: string | undefined;
+  },
 ): Promise<AppendResult> {
-  validateStorageContent(args.content);
+  const representation: Representation = args.representation ?? STORAGE;
 
-  const page = await client.getPage(args.pageId, SUPPORTED_REPRESENTATION);
-  if (page.representation !== SUPPORTED_REPRESENTATION) {
+  // Validate before reading, so invalid content never causes a request.
+  const nodes = representation === ADF ? parseAdfContent(args.content) : undefined;
+  if (representation === STORAGE) validateStorageContent(args.content);
+
+  const page = await client.getPage(args.pageId, representation);
+  if (page.representation !== representation) {
     throw new ContentValidationError(
-      `Page ${args.pageId} uses the '${page.representation}' representation, but only ` +
-        `'${SUPPORTED_REPRESENTATION}' is supported.`,
+      `Page ${args.pageId} returned the '${page.representation}' representation, but ` +
+        `'${representation}' was requested.`,
     );
   }
 
-  const separator = page.body.length > 0 && !page.body.endsWith("\n") ? "\n" : "";
-  const newBody = `${page.body}${separator}${args.content}`;
+  let newBody: string;
+  if (nodes) {
+    newBody = appendToAdfDocument(page.body, nodes);
+  } else {
+    const separator = page.body.length > 0 && !page.body.endsWith("\n") ? "\n" : "";
+    newBody = `${page.body}${separator}${args.content}`;
+  }
 
   const updated = await client.updatePageBody({
     page,
@@ -93,5 +197,10 @@ export async function appendPageContent(
     versionMessage: args.versionMessage?.trim() || DEFAULT_VERSION_MESSAGE,
   });
 
-  return { page: updated, previousVersion: page.version, appendedChars: args.content.length };
+  return {
+    page: updated,
+    previousVersion: page.version,
+    appendedChars: args.content.length,
+    appendedNodes: nodes?.length,
+  };
 }

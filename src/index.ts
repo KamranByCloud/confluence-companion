@@ -3,7 +3,13 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 
-import { appendPageContent, ContentValidationError, SUPPORTED_REPRESENTATION } from "./append.js";
+import {
+  ADF,
+  appendPageContent,
+  ContentValidationError,
+  STORAGE,
+  SUPPORTED_REPRESENTATIONS,
+} from "./append.js";
 import { ConfigError, loadConfig, loadDotEnvIfPresent } from "./config.js";
 import { ConfluenceApiError, ConfluenceClient, VersionConflictError } from "./confluence.js";
 
@@ -61,7 +67,11 @@ async function main(): Promise<void> {
         "already on the page. Performs a read-modify-write: it reads the current body and " +
         "version, appends, and writes the full body back at the next version number. If the " +
         "page changed in the meantime the update is rejected with a conflict and the page is " +
-        `left untouched. Only the '${SUPPORTED_REPRESENTATION}' representation is supported.`,
+        "left untouched.\n\n" +
+        `Prefer '${STORAGE}'. Use '${ADF}' only for a page you know was authored in ` +
+        "Atlassian Document Format: the API cannot report a page's native format, and " +
+        `writing a storage-authored page through '${ADF}' normalizes untouched markup, ` +
+        "for example wrapping table cells in paragraphs.",
       inputSchema: {
         page_id: z
           .string()
@@ -75,11 +85,12 @@ async function main(): Promise<void> {
               "after the existing body.",
           ),
         representation: z
-          .literal(SUPPORTED_REPRESENTATION)
+          .enum(SUPPORTED_REPRESENTATIONS)
           .optional()
           .describe(
-            "Body representation of the supplied content. Only 'storage' is supported; " +
-              "Atlassian Document Format is not yet verified.",
+            `Body representation of the supplied content, '${STORAGE}' by default. For ` +
+              `'${STORAGE}' pass Confluence Storage XHTML; for '${ADF}' pass JSON, either a ` +
+              "whole doc, an array of nodes, or a single node.",
           ),
         version_message: z
           .string()
@@ -88,11 +99,12 @@ async function main(): Promise<void> {
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
     },
-    async ({ page_id, content, version_message }) => {
+    async ({ page_id, content, representation, version_message }) => {
       try {
         const result = await appendPageContent(client, {
           pageId: page_id,
           content,
+          representation,
           versionMessage: version_message,
         });
         return {
@@ -100,7 +112,11 @@ async function main(): Promise<void> {
             {
               type: "text",
               text:
-                `Appended ${result.appendedChars} characters to "${result.page.title}".\n` +
+                `Appended ${
+                  result.appendedNodes === undefined
+                    ? `${result.appendedChars} characters`
+                    : `${result.appendedNodes} node(s)`
+                } to "${result.page.title}".\n` +
                 `Page ID: ${result.page.id}\n` +
                 `Version: ${result.previousVersion} -> ${result.page.version}\n` +
                 `URL: ${result.page.webUrl}`,
@@ -113,6 +129,8 @@ async function main(): Promise<void> {
             version: result.page.version,
             url: result.page.webUrl,
             appended_chars: result.appendedChars,
+            appended_nodes: result.appendedNodes ?? null,
+            representation: result.page.representation,
           },
         };
       } catch (error) {
