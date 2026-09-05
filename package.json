@@ -20,7 +20,8 @@
     "typecheck": "tsc --noEmit",
     "test": "npm run build && node --test \"test/*.test.mjs\"",
     "test:watch": "node --test --watch \"test/*.test.mjs\"",
-    "smoke": "node scripts/smoke.mjs"
+    "smoke": "node scripts/smoke.mjs",
+    "smoke:tables": "node scripts/table-smoke.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",

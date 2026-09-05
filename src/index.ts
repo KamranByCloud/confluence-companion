@@ -10,8 +10,16 @@ import {
   STORAGE,
   SUPPORTED_REPRESENTATIONS,
 } from "./append.js";
-import { ConfigError, loadConfig, loadDotEnvIfPresent } from "./config.js";
+import { parseArgs, runCommand } from "./cli.js";
+import { ConfigError, loadConfig, loadConfigSources } from "./config.js";
 import { ConfluenceApiError, ConfluenceClient, VersionConflictError } from "./confluence.js";
+import {
+  deleteTableRow,
+  getPageTables,
+  insertTableRow,
+  TableValidationError,
+} from "./tables.js";
+import { VERSION } from "./version.js";
 
 /** Turns an internal error into a message that is actionable for the caller. */
 function toToolError(error: unknown): string {
@@ -23,6 +31,7 @@ function toToolError(error: unknown): string {
     );
   }
   if (error instanceof ContentValidationError) return `Invalid content: ${error.message}`;
+  if (error instanceof TableValidationError) return `Invalid table operation: ${error.message}`;
   if (error instanceof ConfluenceApiError) {
     if (error.status === 404) {
       return `${error.message}\n\nThe page does not exist, or the configured account cannot see it.`;
@@ -44,12 +53,12 @@ function toToolError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-async function main(): Promise<void> {
-  loadDotEnvIfPresent();
+async function startMcpServer(): Promise<void> {
+  loadConfigSources();
   const client = new ConfluenceClient(loadConfig());
 
   const server = new McpServer(
-    { name: "confluence-companion", version: "0.1.0" },
+    { name: "confluence-companion", version: VERSION },
     {
       instructions:
         "Direct Confluence Cloud REST operations that complement the Atlassian Rovo MCP " +
@@ -139,12 +148,125 @@ async function main(): Promise<void> {
     },
   );
 
+  const pageId = z.string().regex(/^\d+$/, "page_id must be the numeric Confluence page ID");
+  const tableIdentity = {
+    table_index: z.number().int().min(0).describe("Zero-based table index returned by confluence_get_page_tables."),
+    expected_headers: z
+      .array(z.string())
+      .describe("Headers returned by confluence_get_page_tables. The write is rejected if they changed."),
+  };
+  server.registerTool(
+    "confluence_get_page_tables",
+    {
+      title: "Read tables from a Confluence page",
+      description:
+        "Reads every Storage-format table on a page without modifying it. Returns each table's zero-based index, " +
+        "headers, column count, and zero-based rows as plain text. Call this before a table write so the table and target row " +
+        "can be addressed safely.",
+      inputSchema: { page_id: pageId },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+    },
+    async ({ page_id }) => {
+      try {
+        const result = await getPageTables(client, page_id);
+        return {
+          content: [{ type: "text", text: `Found ${result.tables.length} table(s) on "${result.page.title}".\nPage ID: ${result.page.id}\nURL: ${result.page.webUrl}` }],
+          structuredContent: { page_id: result.page.id, title: result.page.title, version: result.page.version, url: result.page.webUrl, tables: result.tables },
+        };
+      } catch (error) {
+        return { isError: true, content: [{ type: "text", text: toToolError(error) }] };
+      }
+    },
+  );
+
+  server.registerTool(
+    "confluence_insert_table_row",
+    {
+      title: "Insert a row into a Confluence table",
+      description:
+        "Inserts one Storage-XHTML row before the zero-based insert_at_row position. Use 0 for the first row and row_count " +
+        "for the end. Read the tables first and pass the returned version, table index, and headers. Each cell is Storage XHTML " +
+        "and the number of cells must equal the table's columns.",
+      inputSchema: {
+        page_id: pageId,
+        expected_version: z.number().int().min(1).describe("Page version returned by confluence_get_page_tables."),
+        ...tableIdentity,
+        insert_at_row: z.number().int().min(0).describe("Zero-based position before which to insert; row_count appends."),
+        cells: z.array(z.string()).min(1),
+        version_message: z.string().optional(),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+    },
+    async ({ page_id, expected_version, table_index, expected_headers, insert_at_row, cells, version_message }) => {
+      try {
+        const result = await insertTableRow(client, {
+          pageId: page_id,
+          expectedVersion: expected_version,
+          tableIndex: table_index,
+          expectedHeaders: expected_headers,
+          insertAtRow: insert_at_row,
+          cells,
+          ...(version_message === undefined ? {} : { versionMessage: version_message }),
+        });
+        return { content: [{ type: "text", text: `Inserted a row into table ${table_index} on "${result.page.title}".\nVersion: ${result.previousVersion} -> ${result.page.version}\nURL: ${result.page.webUrl}` }], structuredContent: { page_id: result.page.id, table_index, previous_version: result.previousVersion, version: result.page.version, url: result.page.webUrl } };
+      } catch (error) {
+        return { isError: true, content: [{ type: "text", text: toToolError(error) }] };
+      }
+    },
+  );
+
+  server.registerTool(
+    "confluence_delete_table_row",
+    {
+      title: "Delete one row from a Confluence table",
+      description:
+        "Deletes exactly one zero-based row from a Storage-format table. Read the tables first and pass the returned version, " +
+        "table index, and headers. The operation is rejected if the page version or table headers changed.",
+      inputSchema: {
+        page_id: pageId,
+        expected_version: z.number().int().min(1).describe("Page version returned by confluence_get_page_tables."),
+        ...tableIdentity,
+        row_index: z.number().int().min(0).describe("Zero-based data-row index returned by confluence_get_page_tables."),
+        version_message: z.string().optional(),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
+    },
+    async ({ page_id, expected_version, table_index, expected_headers, row_index, version_message }) => {
+      try {
+        const result = await deleteTableRow(client, {
+          pageId: page_id,
+          expectedVersion: expected_version,
+          tableIndex: table_index,
+          expectedHeaders: expected_headers,
+          rowIndex: row_index,
+          ...(version_message === undefined ? {} : { versionMessage: version_message }),
+        });
+        return { content: [{ type: "text", text: `Deleted one row from table ${table_index} on "${result.page.title}".\nVersion: ${result.previousVersion} -> ${result.page.version}\nURL: ${result.page.webUrl}` }], structuredContent: { page_id: result.page.id, table_index, previous_version: result.previousVersion, version: result.page.version, url: result.page.webUrl } };
+      } catch (error) {
+        return { isError: true, content: [{ type: "text", text: toToolError(error) }] };
+      }
+    },
+  );
+
   await server.connect(new StdioServerTransport());
 }
 
-main().catch((error: unknown) => {
-  // stdout carries the MCP protocol, so diagnostics must go to stderr.
-  const message = error instanceof ConfigError ? error.message : String(error);
-  process.stderr.write(`confluence-companion failed to start: ${message}\n`);
-  process.exit(1);
-});
+// Diagnostics go to stderr throughout: on the server path stdout carries the
+// MCP protocol, and a stray line there breaks the client's parser.
+runCommand(parseArgs(process.argv.slice(2)), {
+  out: (message) => process.stdout.write(`${message}\n`),
+  err: (message) => process.stderr.write(`${message}\n`),
+  env: process.env,
+  isInteractive: process.stdin.isTTY === true,
+  startMcpServer,
+})
+  .then((code) => {
+    // The server path resolves only when stdio closes; setting the code rather
+    // than exiting lets it shut down on its own.
+    process.exitCode = code;
+  })
+  .catch((error: unknown) => {
+    const message = error instanceof ConfigError ? error.message : String(error);
+    process.stderr.write(`confluence-companion failed to start: ${message}\n`);
+    process.exit(1);
+  });

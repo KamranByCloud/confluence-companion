@@ -1,0 +1,277 @@
+import { DEFAULT_VERSION_MESSAGE, validateStorageContent } from "./append.js";
+import { ConfluenceClient, type Page } from "./confluence.js";
+
+export interface TableRow {
+  readonly index: number;
+  readonly cells: readonly string[];
+}
+
+export interface PageTable {
+  readonly index: number;
+  readonly headers: readonly string[];
+  readonly columnCount: number;
+  readonly rows: readonly TableRow[];
+}
+
+interface Element {
+  readonly name: string;
+  readonly start: number;
+  readonly contentStart: number;
+  end: number;
+  contentEnd: number;
+  readonly parent: Element | undefined;
+}
+
+interface ParsedTable {
+  readonly body: Element;
+  readonly rows: readonly Element[];
+  readonly headers: readonly string[];
+  readonly columnCount: number;
+}
+
+export class TableValidationError extends Error {}
+
+function tagEnd(markup: string, start: number): number {
+  let quote = "";
+  for (let index = start + 1; index < markup.length; index += 1) {
+    const character = markup[index];
+    if (quote) {
+      if (character === quote) quote = "";
+    } else if (character === '"' || character === "'") {
+      quote = character;
+    } else if (character === ">") {
+      return index + 1;
+    }
+  }
+  throw new TableValidationError("The page body contains an unterminated XML tag.");
+}
+
+/** Parses validated Storage XHTML while retaining offsets for a surgical row edit. */
+function parseElements(markup: string): Element[] {
+  const elements: Element[] = [];
+  const open: Element[] = [];
+  let cursor = 0;
+  while (cursor < markup.length) {
+    const start = markup.indexOf("<", cursor);
+    if (start < 0) break;
+    if (markup.startsWith("<!--", start)) {
+      const end = markup.indexOf("-->", start + 4);
+      cursor = end < 0 ? markup.length : end + 3;
+      continue;
+    }
+    if (markup.startsWith("<![CDATA[", start)) {
+      const end = markup.indexOf("]]>", start + 9);
+      cursor = end < 0 ? markup.length : end + 3;
+      continue;
+    }
+    if (markup.startsWith("<?", start) || markup.startsWith("<!", start)) {
+      cursor = tagEnd(markup, start);
+      continue;
+    }
+
+    const end = tagEnd(markup, start);
+    const raw = markup.slice(start + 1, end - 1).trim();
+    const closing = raw.startsWith("/");
+    const name = (closing ? raw.slice(1) : raw).match(/^([\w:-]+)/)?.[1]?.toLowerCase();
+    if (!name) {
+      cursor = end;
+      continue;
+    }
+    if (closing) {
+      const element = open.pop();
+      if (!element || element.name !== name) throw new TableValidationError("The page body has invalid XML nesting.");
+      element.contentEnd = start;
+      element.end = end;
+    } else if (!raw.endsWith("/")) {
+      const element: Element = {
+        name,
+        start,
+        contentStart: end,
+        end: -1,
+        contentEnd: -1,
+        parent: open.at(-1),
+      };
+      elements.push(element);
+      open.push(element);
+    }
+    cursor = end;
+  }
+  if (open.length > 0) throw new TableValidationError("The page body has unclosed XML elements.");
+  return elements;
+}
+
+function directChildren(element: Element, elements: readonly Element[], name: string): Element[] {
+  return elements.filter((candidate) => candidate.parent === element && candidate.name === name);
+}
+
+function cellsIn(row: Element, elements: readonly Element[]): Element[] {
+  return elements.filter(
+    (candidate) => candidate.parent === row && (candidate.name === "td" || candidate.name === "th"),
+  );
+}
+
+function plainText(markup: string): string {
+  return markup
+    .replace(/<br\s*\/?\s*>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#(?:x([0-9a-f]+)|(\d+));/gi, (_match, hex, decimal) =>
+      String.fromCodePoint(Number.parseInt(hex || decimal, hex ? 16 : 10)),
+    )
+    .replace(/\s*\n\s*/g, "\n")
+    .trim();
+}
+
+function parseTables(markup: string, elements = parseElements(markup)): ParsedTable[] {
+  return elements
+    .filter((element) => element.name === "table")
+    .map((table) => {
+      const head = directChildren(table, elements, "thead")[0];
+      const headerRow = head ? directChildren(head, elements, "tr")[0] : undefined;
+      const body = directChildren(table, elements, "tbody")[0];
+      if (!body) throw new TableValidationError("A table has no tbody and cannot be edited safely.");
+      const bodyRows = directChildren(body, elements, "tr");
+      const impliedHeaderRow =
+        headerRow ??
+        (bodyRows[0] && cellsIn(bodyRows[0], elements).every((cell) => cell.name === "th")
+          ? bodyRows[0]
+          : undefined);
+      const rows = impliedHeaderRow === bodyRows[0] ? bodyRows.slice(1) : bodyRows;
+      const headers = impliedHeaderRow
+        ? cellsIn(impliedHeaderRow, elements).map((cell) => plainText(markup.slice(cell.contentStart, cell.contentEnd)))
+        : [];
+      const columnCount = headers.length || (rows[0] ? cellsIn(rows[0], elements).length : 0);
+      if (columnCount === 0) throw new TableValidationError("A table has no columns and cannot be edited safely.");
+      if (rows.some((row) => cellsIn(row, elements).length !== columnCount)) {
+        throw new TableValidationError("A table has rows with different column counts and cannot be edited safely.");
+      }
+      return { body, rows, headers, columnCount };
+    });
+}
+
+function summarizeTables(markup: string): PageTable[] {
+  const elements = parseElements(markup);
+  return parseTables(markup, elements).map((table, tableIndex) => ({
+    index: tableIndex,
+    headers: table.headers,
+    columnCount: table.columnCount,
+    rows: table.rows.map((row, rowIndex) => ({
+      index: rowIndex,
+      cells: cellsIn(row, elements).map((cell) => plainText(markup.slice(cell.contentStart, cell.contentEnd))),
+    })),
+  }));
+}
+
+function selectTable(body: string, tableIndex: number, expectedHeaders: readonly string[]): ParsedTable {
+  const table = parseTables(body)[tableIndex];
+  if (!table) throw new TableValidationError(`Table index ${tableIndex} does not exist on this page.`);
+  if (JSON.stringify(table.headers) !== JSON.stringify(expectedHeaders)) {
+    throw new TableValidationError(
+      `Table ${tableIndex} no longer has the expected headers. Re-read the page tables before changing it.`,
+    );
+  }
+  return table;
+}
+
+function validateCells(cells: readonly string[], columnCount: number): void {
+  if (cells.length !== columnCount) {
+    throw new TableValidationError(`The table has ${columnCount} columns, but ${cells.length} cells were supplied.`);
+  }
+  for (const cell of cells) validateStorageContent(cell);
+}
+
+async function updateTable(
+  client: ConfluenceClient,
+  args: {
+    pageId: string;
+    expectedVersion: number;
+    versionMessage: string | undefined;
+    transform: (body: string) => string;
+  },
+): Promise<{ page: Page; previousVersion: number }> {
+  const page = await client.getPage(args.pageId, "storage");
+  if (page.version !== args.expectedVersion) {
+    throw new TableValidationError(
+      `The page is now at version ${page.version}, but version ${args.expectedVersion} was read. Re-read the page tables before changing it.`,
+    );
+  }
+  const updated = await client.updatePageBody({
+    page,
+    newBody: args.transform(page.body),
+    expectedVersion: page.version,
+    versionMessage: args.versionMessage?.trim() || DEFAULT_VERSION_MESSAGE,
+  });
+  return { page: updated, previousVersion: page.version };
+}
+
+export async function getPageTables(
+  client: ConfluenceClient,
+  pageId: string,
+): Promise<{ page: Page; tables: PageTable[] }> {
+  const page = await client.getPage(pageId, "storage");
+  validateStorageContent(page.body);
+  return { page, tables: summarizeTables(page.body) };
+}
+
+export async function insertTableRow(
+  client: ConfluenceClient,
+  args: {
+    pageId: string;
+    expectedVersion: number;
+    tableIndex: number;
+    expectedHeaders: readonly string[];
+    insertAtRow: number;
+    cells: readonly string[];
+    versionMessage?: string | undefined;
+  },
+): Promise<{ page: Page; previousVersion: number }> {
+  return updateTable(client, {
+    pageId: args.pageId,
+    expectedVersion: args.expectedVersion,
+    versionMessage: args.versionMessage,
+    transform: (body) => {
+      validateStorageContent(body);
+      const table = selectTable(body, args.tableIndex, args.expectedHeaders);
+      if (!Number.isInteger(args.insertAtRow) || args.insertAtRow < 0 || args.insertAtRow > table.rows.length) {
+        throw new TableValidationError(
+          `insert_at_row must be between 0 and ${table.rows.length} for this table, inclusive.`,
+        );
+      }
+      validateCells(args.cells, table.columnCount);
+      const row = `<tr>${args.cells.map((cell) => `<td>${cell}</td>`).join("")}</tr>`;
+      const offset = table.rows[args.insertAtRow]?.start ?? table.body.contentEnd;
+      return `${body.slice(0, offset)}${row}${body.slice(offset)}`;
+    },
+  });
+}
+
+export async function deleteTableRow(
+  client: ConfluenceClient,
+  args: {
+    pageId: string;
+    expectedVersion: number;
+    tableIndex: number;
+    expectedHeaders: readonly string[];
+    rowIndex: number;
+    versionMessage?: string | undefined;
+  },
+): Promise<{ page: Page; previousVersion: number }> {
+  return updateTable(client, {
+    pageId: args.pageId,
+    expectedVersion: args.expectedVersion,
+    versionMessage: args.versionMessage,
+    transform: (body) => {
+      validateStorageContent(body);
+      const table = selectTable(body, args.tableIndex, args.expectedHeaders);
+      const row = table.rows[args.rowIndex];
+      if (!Number.isInteger(args.rowIndex) || args.rowIndex < 0 || !row) {
+        throw new TableValidationError(`row_index must be between 0 and ${table.rows.length - 1} for this table.`);
+      }
+      return `${body.slice(0, row.start)}${body.slice(row.end)}`;
+    },
+  });
+}

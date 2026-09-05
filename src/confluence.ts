@@ -117,6 +117,15 @@ export class ConfluenceClient {
     return payload;
   }
 
+  /**
+   * Cheapest authenticated call the site offers. `init` uses it to prove the
+   * credentials work while the user is still in front of the prompt, instead
+   * of letting a bad token surface at the first tool call much later.
+   */
+  async verifyAccess(): Promise<void> {
+    await this.#request("GET", "/api/v2/spaces?limit=1");
+  }
+
   /** Reads a page including its body in the given representation. */
   async getPage(pageId: string, representation: string): Promise<Page> {
     const raw = (await this.#request(
