@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { deleteTableRow, getPageTables, insertTableRow, TableValidationError } from "../dist/tables.js";
+import {
+  deleteTableRow,
+  getPageTables,
+  insertTableRow,
+  insertTableColumn,
+  TableValidationError,
+  updateTableCell,
+} from "../dist/tables.js";
 
 // Reduced fixture from the Change-, Backlog- und Release-Register's first table.
 const registerTable = `<table><thead><tr><th><p>Datum</p></th><th><p>Typ</p></th><th><p>Backlog / Thema</p></th><th><p>PR / Branch</p></th><th><p>Status</p></th><th><p>Scope und Ergebnis</p></th></tr></thead><tbody><tr><td><p>2026-09-04</p></td><td><p>Maintenance</p></td><td><p>OMN-371<br/>Lokale Caddy-Domain in Django freigeben</p></td><td><p>#501</p></td><td><p>Gemerged</p></td><td><p>Browser-Login-Smoke offen.</p></td></tr><tr><td><p>2026-09-04</p></td><td><p>Runtime-Haertung</p></td><td><p>OMN-370<br/>Redis-Image-Pinning</p></td><td><p>Kein PR</p></td><td><p>Backlog</p></td><td><p>Stage- und Rollback-Nachweise.</p></td></tr><tr><td><p>2026-09-03</p></td><td><p>Upgrade</p></td><td><p>OMN-360<br/>django-redis 7</p></td><td><p>#503</p></td><td><p>Gemerged</p></td><td><p>Deployment-Nachweis offen.</p></td></tr></tbody></table>`;
@@ -75,5 +82,72 @@ describe("Confluence storage tables", () => {
     assert.ok(!client.calls[0].newBody.includes("OMN-370"));
     assert.ok(client.calls[0].newBody.includes("OMN-371"));
     assert.ok(client.calls[0].newBody.includes("OMN-360"));
+  });
+
+  it("replaces only the requested cell while preserving the cell element and attributes", async () => {
+    const attributed = page.body.replace('<td><p>Backlog</p></td>', '<td data-colwidth="246"><p>Backlog</p></td>');
+    const client = fakeClient({ ...page, body: attributed });
+    await updateTableCell(client, {
+      pageId: "123",
+      expectedVersion: 4,
+      tableIndex: 0,
+      expectedHeaders: headers,
+      rowIndex: 1,
+      columnIndex: 4,
+      content: '<p><span data-type="status" data-color="green">Erledigt</span></p>',
+    });
+    const body = client.calls[0].newBody;
+    assert.ok(body.includes('<td data-colwidth="246"><p><span data-type="status" data-color="green">Erledigt</span></p></td>'));
+    assert.ok(body.includes("<p>Gemerged</p>"));
+  });
+
+  it("inserts a column at a chosen position across the header and every data row", async () => {
+    const client = fakeClient();
+    await insertTableColumn(client, {
+      pageId: "123",
+      expectedVersion: 4,
+      tableIndex: 0,
+      expectedHeaders: headers,
+      insertAtColumn: 1,
+      header: "<p>Owner</p>",
+      cells: ["<p>Ada</p>", "<p>Bea</p>", "<p>Cam</p>"],
+    });
+    const result = await getPageTables(fakeClient({ ...page, body: client.calls[0].newBody }), "123");
+    assert.deepEqual(result.tables[0].headers, ["Datum", "Owner", ...headers.slice(1)]);
+    assert.deepEqual(result.tables[0].rows.map((row) => row.cells[1]), ["Ada", "Bea", "Cam"]);
+  });
+
+  it("rejects a column whose cells do not cover every data row", async () => {
+    const client = fakeClient();
+    await assert.rejects(
+      insertTableColumn(client, {
+        pageId: "123",
+        expectedVersion: 4,
+        tableIndex: 0,
+        expectedHeaders: headers,
+        insertAtColumn: 0,
+        header: "<p>Owner</p>",
+        cells: ["<p>Ada</p>"],
+      }),
+      TableValidationError,
+    );
+    assert.equal(client.calls.length, 0);
+  });
+
+  it("rejects an out-of-range cell before writing", async () => {
+    const client = fakeClient();
+    await assert.rejects(
+      updateTableCell(client, {
+        pageId: "123",
+        expectedVersion: 4,
+        tableIndex: 0,
+        expectedHeaders: headers,
+        rowIndex: 3,
+        columnIndex: 6,
+        content: "<p>x</p>",
+      }),
+      TableValidationError,
+    );
+    assert.equal(client.calls.length, 0);
   });
 });

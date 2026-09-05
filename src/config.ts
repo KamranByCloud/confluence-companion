@@ -1,13 +1,12 @@
 import { chmodSync, mkdirSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 
 /**
  * Configuration is resolved from the environment first and from a single
- * per-user file second. The file lives outside every project so that the API
- * token is entered once per machine and never reaches a repository or a client
- * configuration.
+ * per-user file second. That file lives outside every project, so the API
+ * token is entered once per machine and never reaches a repository, a client
+ * configuration, or an installed artifact.
  */
 export interface Config {
   /** Site base URL without trailing slash, e.g. https://example.atlassian.net */
@@ -41,23 +40,16 @@ export function userConfigPath(env: NodeJS.ProcessEnv = process.env, home = home
 }
 
 /**
- * Path to a .env shipped next to the installed package.
+ * The files that are consulted, after the environment.
  *
- * Resolved from this module rather than the working directory: an MCP client
- * starts the server from wherever it happens to be, so a relative ".env" would
- * be found or missed depending on how it was launched.
- *
- * This is the transitional source. It only works for a checkout that is also
- * the install, and it is the one mechanism that could carry a token to another
- * machine by accident, so prefer the per-user file.
+ * A .env inside the checkout used to be a fallback here. It was dropped once
+ * the server was installed as a single bundled file: relative to that file the
+ * path resolves to nonsense, it only ever worked for a checkout that was also
+ * the install, and it was the one mechanism that could carry a token to
+ * another machine by accident.
  */
-export function packageEnvPath(): string {
-  return fileURLToPath(new URL("../.env", import.meta.url));
-}
-
-/** The files that are consulted, in descending precedence. */
 export function configSources(): readonly string[] {
-  return [userConfigPath(), packageEnvPath()];
+  return [userConfigPath()];
 }
 
 /**
@@ -69,7 +61,7 @@ export function configSources(): readonly string[] {
  * from the real environment nor one from a file loaded earlier. Precedence
  * therefore falls out of the load order and needs no bookkeeping here.
  */
-export function loadDotEnvIfPresent(path: string = packageEnvPath()): boolean {
+export function loadDotEnvIfPresent(path: string): boolean {
   try {
     process.loadEnvFile(path);
     return true;

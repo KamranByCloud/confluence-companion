@@ -1,0 +1,87 @@
+#!/bin/sh
+# Installs confluence-companion as a single executable file.
+#
+# The result is one bundled file in ~/.local/bin with no node_modules beside
+# it, so the checkout is only a build tool: moving or deleting it afterwards
+# does not break the installed server. Credentials are not touched here; run
+# 'confluence-companion init' for those.
+#
+# Usage: bin/install [--no-deps]
+#   --no-deps   Skip 'npm ci'. For a rebuild during development.
+#   PREFIX      Install root, default ~/.local. The file lands in $PREFIX/bin.
+
+set -eu
+
+NAME=confluence-companion
+PREFIX="${PREFIX:-$HOME/.local}"
+BIN_DIR="$PREFIX/bin"
+TARGET="$BIN_DIR/$NAME"
+REPO_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+MIN_NODE_MAJOR=20
+
+skip_deps=0
+for argument in "$@"; do
+	case "$argument" in
+	--no-deps) skip_deps=1 ;;
+	-h | --help)
+		sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'
+		exit 0
+		;;
+	*)
+		echo "$NAME install: unknown option: $argument" >&2
+		exit 2
+		;;
+	esac
+done
+
+fail() {
+	echo "$NAME install: $1" >&2
+	exit 1
+}
+
+command -v node >/dev/null 2>&1 || fail "node is required but not on PATH. Install Node $MIN_NODE_MAJOR or newer."
+
+node_major=$(node -p 'process.versions.node.split(".")[0]')
+[ "$node_major" -ge "$MIN_NODE_MAJOR" ] ||
+	fail "Node $MIN_NODE_MAJOR or newer is required, found $(node -v)."
+
+if [ "$skip_deps" -eq 0 ]; then
+	command -v npm >/dev/null 2>&1 || fail "npm is required but not on PATH."
+	echo "Installing build dependencies ..."
+	(cd "$REPO_DIR" && npm ci --no-fund --no-audit >/dev/null)
+fi
+
+echo "Checking types ..."
+(cd "$REPO_DIR" && npm run --silent typecheck)
+
+echo "Bundling ..."
+(cd "$REPO_DIR" && npm run --silent bundle >/dev/null)
+
+BUNDLE="$REPO_DIR/dist/$NAME.mjs"
+[ -f "$BUNDLE" ] || fail "the bundle was not produced at $BUNDLE."
+
+mkdir -p "$BIN_DIR"
+# Copied rather than linked, so the installed command keeps working when the
+# checkout moves or goes away.
+cp "$BUNDLE" "$TARGET"
+chmod 755 "$TARGET"
+
+# Prove the installed file runs before claiming success.
+installed_version=$("$TARGET" version) || fail "the installed file does not run."
+
+echo "Installed $NAME $installed_version to $TARGET"
+
+case ":${PATH}:" in
+*":$BIN_DIR:"*) ;;
+*)
+	echo
+	echo "Warning: $BIN_DIR is not on your PATH, so the command will not be found."
+	echo "Add this to your shell profile:"
+	echo "    export PATH=\"$BIN_DIR:\$PATH\""
+	;;
+esac
+
+echo
+echo "Next:"
+echo "    $NAME init      # store this machine's Atlassian credentials"
+echo "    $NAME config    # check where each setting is resolved from"

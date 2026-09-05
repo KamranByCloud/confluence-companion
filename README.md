@@ -24,16 +24,34 @@ The initial local setup uses a normal Atlassian API token via Basic
 Authentication. The token must not be committed. A future shared or remote
 deployment can use OAuth instead.
 
-## Requirements
-
-Node.js 20 or newer.
-
-## Setup
+## Installation
 
 ```bash
-npm install
-npm run build
-node dist/index.js init   # asks for site URL, email, and API token
+git clone https://github.com/KamranByCloud/confluence-companion.git
+cd confluence-companion
+make install                  # or: bin/install
+confluence-companion init     # asks for site URL, email, and API token
+```
+
+`make install` is a thin front for `bin/install`, which holds the logic so the
+same steps work without make. It installs **one** file, a bundle of the server
+and all its dependencies, to `~/.local/bin/confluence-companion`. Set `PREFIX`
+to install elsewhere.
+
+The file is copied, not linked, so the checkout is only a build tool: moving or
+deleting it afterwards does not break the installed command. Keep it to update:
+
+```bash
+make update      # git pull --ff-only, then reinstall
+make uninstall   # remove the command, keeping the credentials
+```
+
+Node.js 20 or newer must be on `PATH`; the bundle carries the application code
+but not the JavaScript runtime. So an installation is two files:
+
+```text
+~/.local/bin/confluence-companion                  the program, ~1.3 MB
+~/.config/confluence-companion/config.env          the credentials, mode 600
 ```
 
 `init` stores the credentials in `~/.config/confluence-companion/config.env` at
@@ -47,16 +65,17 @@ site REST API.
 
 ## Configuration
 
-Settings are resolved from three sources, in descending precedence:
+Settings are resolved from two sources, in descending precedence:
 
 | Source | Purpose |
 | --- | --- |
 | `ATLASSIAN_SITE_URL`, `ATLASSIAN_EMAIL`, `ATLASSIAN_API_TOKEN` | Environment; how a dev container or CI passes credentials in without a file |
 | `${XDG_CONFIG_HOME:-~/.config}/confluence-companion/config.env` | The per-user file written by `init` |
-| `.env` next to the package | Transitional, for a checkout that is also the install |
 
-Environment variables always win, and a file never overrides a value that is
-already set. `confluence-companion config` prints which source supplied each
+Environment variables always win, and the file never overrides a value that is
+already set. A `.env` inside the checkout is **not** read: it only ever worked
+for a checkout that was also the install, and it was the one mechanism that
+could carry a token to another machine by accident. `confluence-companion config` prints which source supplied each
 setting; it reports the token's length but never the token itself.
 
 In a dev container no file is needed at all: pass the three variables through
@@ -88,18 +107,22 @@ without the token being written into client configuration.
 For Claude Code:
 
 ```bash
-claude mcp add -s user confluence-companion -- node /absolute/path/to/confluence-companion/dist/index.js
+claude mcp add -s user confluence-companion -- confluence-companion
 ```
 
-Any client that supports stdio servers can be configured directly. Environment
-variables, if given, take precedence over the `.env`:
+Any client that supports stdio servers can be configured directly. The bare
+command name is deliberate: it carries no machine-specific path, so the same
+configuration works on another machine and inside a dev container, where the
+name may resolve to a different file.
+
+Environment variables, if given, take precedence over the configuration file,
+but they are not needed when `init` has run:
 
 ```json
 {
   "mcpServers": {
     "confluence-companion": {
-      "command": "node",
-      "args": ["/absolute/path/to/confluence-companion/dist/index.js"],
+      "command": "confluence-companion",
       "env": {
         "ATLASSIAN_SITE_URL": "https://your-site.atlassian.net",
         "ATLASSIAN_EMAIL": "you@example.com",
@@ -166,6 +189,11 @@ the append tool.
    inserts before the first data row; `insert_at_row: row_count` appends after
    the last one; every value in between inserts before that zero-based row.
 3. `confluence_delete_table_row` deletes one zero-based data row.
+4. `confluence_update_table_cell` replaces one cell's content at a zero-based
+   row and column index. It preserves the existing `td` or `th` element and its
+   attributes, including `data-colwidth`.
+5. `confluence_insert_table_column` inserts a complete column. It requires a
+   header cell and exactly one new cell for every existing data row.
 
 Read a table immediately before changing it. Both write tools require the
 returned `expected_version`, `table_index`, and `expected_headers`. A changed
@@ -173,9 +201,8 @@ page version or table schema is rejected before the write, so an old row index
 cannot silently target a different row. New cells must be well-formed
 Confluence Storage XHTML and their count must exactly match the table's columns.
 
-Changing an individual cell and atomically replacing a whole row are deliberately
-out of scope for this first table release. Replacing a row can be performed as a
-delete followed by an insert after re-reading the table.
+Atomically replacing a whole row is deliberately out of scope. It can be
+performed as a delete followed by an insert after re-reading the table.
 
 ## Tests
 
@@ -189,28 +216,31 @@ request shaping, error mapping, version-conflict translation, command-line
 parsing, the `init` flow, and configuration resolution including its precedence
 order and file permissions.
 
-`npm run smoke -- <page-id>` is a separate end-to-end check that drives the
-server as a real MCP client. It writes to the page you give it, so point it at
-a scratch page, never at a real one.
+`npm run smoke -- <storage-page-id> [adf-page-id] [table-page-id] [column-page-id]` is a
+separate end-to-end check that drives the server as a real MCP client. Every
+target is written to, so use scratch pages only. When a table page is supplied,
+it must contain exactly one six-column Storage table; the test inserts a uniquely
+marked final row and deletes it again, leaving its table rows unchanged while
+increasing the page version twice. When a column page is supplied, it must
+start with one two-column table and one data row; the test inserts a top row,
+adds a column, then inserts a row in the middle.
 
-`npm run smoke:tables -- <page-id>` checks the table tools through MCP. Its
-target must be a scratch Storage page with exactly one six-column table. It
-inserts a uniquely marked final row and deletes it again, so the table rows are
-left unchanged while the page version increases twice.
-
-The server runs from `dist/`, so run `npm run build` after changing the source
-for a client to pick the change up.
+After changing the source, run `make dev-install` so a client picks the change
+up. It rebuilds the bundle and replaces the installed file without reinstalling
+dependencies.
 
 ## Status
 
-Working append tool, registered and connected as a stdio MCP server, with unit
-tests and live checks. Credentials are per user and outside the project, and the
-command has a subcommand interface. Still missing for an install on another
-machine: a bundled artifact on `PATH`, registration of the server with each
-assistant, and an update path. Architecture decisions, research, and verified
-API details are kept in local working notes that are not part of this
-repository, because they contain site-specific configuration.
+Working append and table tools, installable as a single file on `PATH`, with
+per-user credentials, a subcommand interface, unit tests, and live checks.
+Updating is `make update`.
 
-The `.env` in the checkout still works as the last fallback, but
-`confluence-companion init` is the supported way to store credentials. Both
-files are gitignored and must stay at mode `600`.
+Still open: registering the server with each assistant automatically. Claude
+Code, OpenCode, Cursor, and Codex each keep their MCP configuration in a
+different place, so `confluence-companion install` is planned to detect what is
+present and write the entries after confirmation. Until then, register the
+command by hand as shown above.
+
+Architecture decisions, research, and verified API details are kept in local
+working notes that are not part of this repository, because they contain
+site-specific configuration.

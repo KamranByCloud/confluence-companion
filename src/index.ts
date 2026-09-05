@@ -17,7 +17,9 @@ import {
   deleteTableRow,
   getPageTables,
   insertTableRow,
+  insertTableColumn,
   TableValidationError,
+  updateTableCell,
 } from "./tables.js";
 import { VERSION } from "./version.js";
 
@@ -209,6 +211,81 @@ async function startMcpServer(): Promise<void> {
           ...(version_message === undefined ? {} : { versionMessage: version_message }),
         });
         return { content: [{ type: "text", text: `Inserted a row into table ${table_index} on "${result.page.title}".\nVersion: ${result.previousVersion} -> ${result.page.version}\nURL: ${result.page.webUrl}` }], structuredContent: { page_id: result.page.id, table_index, previous_version: result.previousVersion, version: result.page.version, url: result.page.webUrl } };
+      } catch (error) {
+        return { isError: true, content: [{ type: "text", text: toToolError(error) }] };
+      }
+    },
+  );
+
+  server.registerTool(
+    "confluence_insert_table_column",
+    {
+      title: "Insert a column into a Confluence table",
+      description:
+        "Inserts a complete column before the zero-based insert_at_column position across the header and every data row. " +
+        "Use 0 for the first column and column_count for the end. Read the table first and pass one Storage-XHTML cell for " +
+        "each current data row.",
+      inputSchema: {
+        page_id: pageId,
+        expected_version: z.number().int().min(1).describe("Page version returned by confluence_get_page_tables."),
+        ...tableIdentity,
+        insert_at_column: z.number().int().min(0).describe("Zero-based position before which to insert; column_count appends."),
+        header: z.string().min(1).describe("New header-cell content as well-formed Confluence Storage XHTML."),
+        cells: z.array(z.string()).describe("New Storage-XHTML cells, in current data-row order; one value for every row."),
+        version_message: z.string().optional(),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+    },
+    async ({ page_id, expected_version, table_index, expected_headers, insert_at_column, header, cells, version_message }) => {
+      try {
+        const result = await insertTableColumn(client, {
+          pageId: page_id,
+          expectedVersion: expected_version,
+          tableIndex: table_index,
+          expectedHeaders: expected_headers,
+          insertAtColumn: insert_at_column,
+          header,
+          cells,
+          ...(version_message === undefined ? {} : { versionMessage: version_message }),
+        });
+        return { content: [{ type: "text", text: `Inserted a column into table ${table_index} on "${result.page.title}".\nVersion: ${result.previousVersion} -> ${result.page.version}\nURL: ${result.page.webUrl}` }], structuredContent: { page_id: result.page.id, table_index, previous_version: result.previousVersion, version: result.page.version, url: result.page.webUrl } };
+      } catch (error) {
+        return { isError: true, content: [{ type: "text", text: toToolError(error) }] };
+      }
+    },
+  );
+
+  server.registerTool(
+    "confluence_update_table_cell",
+    {
+      title: "Update one cell in a Confluence table",
+      description:
+        "Replaces the Storage-XHTML content of one cell while preserving its existing cell element and attributes, such as " +
+        "column width. Read the tables first and pass the returned version, table index, headers, row index, and column index.",
+      inputSchema: {
+        page_id: pageId,
+        expected_version: z.number().int().min(1).describe("Page version returned by confluence_get_page_tables."),
+        ...tableIdentity,
+        row_index: z.number().int().min(0).describe("Zero-based data-row index returned by confluence_get_page_tables."),
+        column_index: z.number().int().min(0).describe("Zero-based column index returned by confluence_get_page_tables."),
+        content: z.string().min(1).describe("Replacement cell content as well-formed Confluence Storage XHTML."),
+        version_message: z.string().optional(),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+    },
+    async ({ page_id, expected_version, table_index, expected_headers, row_index, column_index, content, version_message }) => {
+      try {
+        const result = await updateTableCell(client, {
+          pageId: page_id,
+          expectedVersion: expected_version,
+          tableIndex: table_index,
+          expectedHeaders: expected_headers,
+          rowIndex: row_index,
+          columnIndex: column_index,
+          content,
+          ...(version_message === undefined ? {} : { versionMessage: version_message }),
+        });
+        return { content: [{ type: "text", text: `Updated cell ${column_index} in row ${row_index} of table ${table_index} on "${result.page.title}".\nVersion: ${result.previousVersion} -> ${result.page.version}\nURL: ${result.page.webUrl}` }], structuredContent: { page_id: result.page.id, table_index, row_index, column_index, previous_version: result.previousVersion, version: result.page.version, url: result.page.webUrl } };
       } catch (error) {
         return { isError: true, content: [{ type: "text", text: toToolError(error) }] };
       }

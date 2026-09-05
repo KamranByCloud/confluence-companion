@@ -12,7 +12,6 @@ import {
   loadConfigSources,
   loadDotEnvIfPresent,
   normalizeConfig,
-  packageEnvPath,
   renderConfigFile,
   resolveWithProvenance,
   userConfigPath,
@@ -157,21 +156,17 @@ describe("userConfigPath", () => {
   });
 });
 
-describe("packageEnvPath", () => {
-  it("resolves .env next to the package, not the working directory", () => {
-    const path = packageEnvPath();
-    assert.ok(path.startsWith("/"), `expected an absolute path, got ${path}`);
-    assert.ok(path.endsWith("/.env"), path);
-    assert.ok(!path.includes("/dist/"), `must point beside the package, got ${path}`);
-  });
-});
-
 describe("configSources", () => {
-  it("puts the per-user file ahead of the package .env", () => {
+  it("consults the per-user file and nothing else", () => {
+    // A .env inside the checkout is deliberately not a source: relative to an
+    // installed single-file bundle that path resolves to nonsense, and it
+    // could carry a token to another machine.
     const sources = configSources();
-    assert.equal(sources.length, 2);
-    assert.ok(sources[0].endsWith("/confluence-companion/config.env"), sources[0]);
-    assert.equal(sources[1], packageEnvPath());
+    assert.deepEqual(sources, [userConfigPath()]);
+  });
+
+  it("uses an absolute path, since the server is started from anywhere", () => {
+    assert.ok(configSources()[0].startsWith("/"), configSources()[0]);
   });
 });
 
@@ -193,40 +188,40 @@ describe("loadDotEnvIfPresent", () => {
 describe("configuration precedence", () => {
   function sourcesWith(first, second) {
     const dir = tempDir();
-    const a = join(dir, "user.env");
-    const b = join(dir, "package.env");
+    const a = join(dir, "first.env");
+    const b = join(dir, "second.env");
     writeFileSync(a, first, { mode: 0o600 });
     writeFileSync(b, second, { mode: 0o600 });
     return [a, b];
   }
 
   it("lets the environment win over every file", () => {
-    const sources = sourcesWith("ATLASSIAN_EMAIL=user@file\n", "ATLASSIAN_EMAIL=package@file\n");
+    const sources = sourcesWith("ATLASSIAN_EMAIL=first@file\n", "ATLASSIAN_EMAIL=second@file\n");
     setEnv({ ATLASSIAN_EMAIL: "real@env" });
     loadConfigSources({ sources, warn: () => {} });
     assert.equal(process.env.ATLASSIAN_EMAIL, "real@env");
   });
 
-  it("lets the per-user file win over the package .env", () => {
-    const sources = sourcesWith("ATLASSIAN_EMAIL=user@file\n", "ATLASSIAN_EMAIL=package@file\n");
+  it("lets an earlier source win over a later one", () => {
+    const sources = sourcesWith("ATLASSIAN_EMAIL=first@file\n", "ATLASSIAN_EMAIL=second@file\n");
     setEnv({});
     loadConfigSources({ sources, warn: () => {} });
-    assert.equal(process.env.ATLASSIAN_EMAIL, "user@file");
+    assert.equal(process.env.ATLASSIAN_EMAIL, "first@file");
   });
 
-  it("still falls back to the package .env for a setting the user file omits", () => {
+  it("falls back to a later source for a setting the earlier one omits", () => {
     const sources = sourcesWith(
-      "ATLASSIAN_EMAIL=user@file\n",
-      "ATLASSIAN_EMAIL=package@file\nATLASSIAN_API_TOKEN=package-token\n",
+      "ATLASSIAN_EMAIL=first@file\n",
+      "ATLASSIAN_EMAIL=second@file\nATLASSIAN_API_TOKEN=second-token\n",
     );
     setEnv({});
     loadConfigSources({ sources, warn: () => {} });
-    assert.equal(process.env.ATLASSIAN_EMAIL, "user@file");
-    assert.equal(process.env.ATLASSIAN_API_TOKEN, "package-token");
+    assert.equal(process.env.ATLASSIAN_EMAIL, "first@file");
+    assert.equal(process.env.ATLASSIAN_API_TOKEN, "second-token");
   });
 
   it("returns only the sources that existed", () => {
-    const [a] = sourcesWith("ATLASSIAN_EMAIL=user@file\n", "");
+    const [a] = sourcesWith("ATLASSIAN_EMAIL=first@file\n", "");
     setEnv({});
     const loaded = loadConfigSources({ sources: [a, "/nope/missing.env"], warn: () => {} });
     assert.deepEqual(loaded, [a]);

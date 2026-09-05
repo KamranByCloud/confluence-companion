@@ -166,8 +166,13 @@ function summarizeTables(markup: string): PageTable[] {
   }));
 }
 
-function selectTable(body: string, tableIndex: number, expectedHeaders: readonly string[]): ParsedTable {
-  const table = parseTables(body)[tableIndex];
+function selectTable(
+  body: string,
+  tableIndex: number,
+  expectedHeaders: readonly string[],
+  elements = parseElements(body),
+): ParsedTable {
+  const table = parseTables(body, elements)[tableIndex];
   if (!table) throw new TableValidationError(`Table index ${tableIndex} does not exist on this page.`);
   if (JSON.stringify(table.headers) !== JSON.stringify(expectedHeaders)) {
     throw new TableValidationError(
@@ -235,7 +240,8 @@ export async function insertTableRow(
     versionMessage: args.versionMessage,
     transform: (body) => {
       validateStorageContent(body);
-      const table = selectTable(body, args.tableIndex, args.expectedHeaders);
+      const elements = parseElements(body);
+      const table = selectTable(body, args.tableIndex, args.expectedHeaders, elements);
       if (!Number.isInteger(args.insertAtRow) || args.insertAtRow < 0 || args.insertAtRow > table.rows.length) {
         throw new TableValidationError(
           `insert_at_row must be between 0 and ${table.rows.length} for this table, inclusive.`,
@@ -272,6 +278,115 @@ export async function deleteTableRow(
         throw new TableValidationError(`row_index must be between 0 and ${table.rows.length - 1} for this table.`);
       }
       return `${body.slice(0, row.start)}${body.slice(row.end)}`;
+    },
+  });
+}
+
+export async function updateTableCell(
+  client: ConfluenceClient,
+  args: {
+    pageId: string;
+    expectedVersion: number;
+    tableIndex: number;
+    expectedHeaders: readonly string[];
+    rowIndex: number;
+    columnIndex: number;
+    content: string;
+    versionMessage?: string | undefined;
+  },
+): Promise<{ page: Page; previousVersion: number }> {
+  validateStorageContent(args.content);
+  return updateTable(client, {
+    pageId: args.pageId,
+    expectedVersion: args.expectedVersion,
+    versionMessage: args.versionMessage,
+    transform: (body) => {
+      validateStorageContent(body);
+      const elements = parseElements(body);
+      const table = selectTable(body, args.tableIndex, args.expectedHeaders, elements);
+      const row = table.rows[args.rowIndex];
+      if (!Number.isInteger(args.rowIndex) || args.rowIndex < 0 || !row) {
+        throw new TableValidationError(`row_index must be between 0 and ${table.rows.length - 1} for this table.`);
+      }
+      if (!Number.isInteger(args.columnIndex) || args.columnIndex < 0 || args.columnIndex >= table.columnCount) {
+        throw new TableValidationError(`column_index must be between 0 and ${table.columnCount - 1} for this table.`);
+      }
+      const cell = cellsIn(row, elements)[args.columnIndex]!;
+      return `${body.slice(0, cell.contentStart)}${args.content}${body.slice(cell.contentEnd)}`;
+    },
+  });
+}
+
+export async function insertTableColumn(
+  client: ConfluenceClient,
+  args: {
+    pageId: string;
+    expectedVersion: number;
+    tableIndex: number;
+    expectedHeaders: readonly string[];
+    insertAtColumn: number;
+    header: string;
+    cells: readonly string[];
+    versionMessage?: string | undefined;
+  },
+): Promise<{ page: Page; previousVersion: number }> {
+  validateStorageContent(args.header);
+  for (const cell of args.cells) validateStorageContent(cell);
+  return updateTable(client, {
+    pageId: args.pageId,
+    expectedVersion: args.expectedVersion,
+    versionMessage: args.versionMessage,
+    transform: (body) => {
+      validateStorageContent(body);
+      const elements = parseElements(body);
+      const table = selectTable(body, args.tableIndex, args.expectedHeaders, elements);
+      if (
+        !Number.isInteger(args.insertAtColumn) ||
+        args.insertAtColumn < 0 ||
+        args.insertAtColumn > table.columnCount
+      ) {
+        throw new TableValidationError(
+          `insert_at_column must be between 0 and ${table.columnCount} for this table, inclusive.`,
+        );
+      }
+      if (args.cells.length !== table.rows.length) {
+        throw new TableValidationError(
+          `The table has ${table.rows.length} data rows, but ${args.cells.length} new cell values were supplied.`,
+        );
+      }
+
+      const rows = table.rows;
+      const tableElement = elements.find(
+        (element) => element.name === "table" && element.start <= table.body.start && element.end >= table.body.end,
+      );
+      if (!tableElement) throw new TableValidationError("Could not locate the selected table.");
+      const head = directChildren(tableElement, elements, "thead")[0];
+      const explicitHeader = head ? directChildren(head, elements, "tr")[0] : undefined;
+      const firstBodyRow = directChildren(table.body, elements, "tr")[0];
+      const impliedHeader =
+        !explicitHeader && firstBodyRow && cellsIn(firstBodyRow, elements).every((cell) => cell.name === "th")
+          ? firstBodyRow
+          : undefined;
+      const headerRow = explicitHeader ?? impliedHeader;
+      if (!headerRow) throw new TableValidationError("A table without a header row cannot be edited safely.");
+
+      const replacements = [
+        { row: headerRow, content: args.header, tag: "th" },
+        ...rows.map((row, index) => ({ row, content: args.cells[index]!, tag: "td" })),
+      ]
+        .map(({ row, content, tag }) => {
+          const cells = cellsIn(row, elements);
+          const reference = cells[args.insertAtColumn];
+          const offset = reference?.start ?? row.contentEnd;
+          return { offset, value: `<${reference?.name ?? tag}>${content}</${reference?.name ?? tag}>` };
+        })
+        .sort((left, right) => right.offset - left.offset);
+
+      let updated = body;
+      for (const replacement of replacements) {
+        updated = `${updated.slice(0, replacement.offset)}${replacement.value}${updated.slice(replacement.offset)}`;
+      }
+      return updated;
     },
   });
 }
