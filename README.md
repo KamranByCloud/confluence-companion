@@ -330,6 +330,14 @@ This avoids guessing when identical text or markup appears in several places.
 Copy an appropriately large, unique fragment from the page body rather than
 using only a repeated word or a small inline element.
 
+Copy it from the **stored** body, not from content written earlier. Confluence
+rewrites non-ASCII characters into named entities when it saves a page, so a
+paragraph sent as `<p>angehängt — äöü</p>` is stored as
+`<p>angeh&auml;ngt &mdash; &auml;&ouml;&uuml;</p>` and the string that created it
+no longer matches. A fragment that differs only in that encoding is reported as
+such, rather than as a fragment that is simply absent, so re-read the page and
+copy the stored form.
+
 For example, to insert a paragraph after one unique heading:
 
 ```json

@@ -246,6 +246,35 @@ describe("targeted Storage content operations", () => {
     assert.equal(client.calls.find((c) => c.op === "update").newBody, "<p>keep</p><p>keep too</p>");
   });
 
+  it("names the entity rewrite when only the encoding differs, and writes nothing", async () => {
+    // Confluence stored this paragraph after it was written as "angehängt — äöü".
+    const stored = "<p>keep</p><p>angeh&auml;ngt &mdash; &auml;&ouml;&uuml;</p>";
+    const client = fakeClient({ ...basePage, body: stored });
+    await assert.rejects(
+      deletePageContent(client, { pageId: "123", targetContent: "<p>angehängt — äöü</p>" }),
+      /target_content occurs in the page body only once HTML entities are decoded/,
+    );
+    assert.equal(client.calls.filter((c) => c.op === "update").length, 0);
+  });
+
+  it("still reports a plainly absent fragment as absent", async () => {
+    const client = fakeClient({ ...basePage, body: "<p>angeh&auml;ngt</p>" });
+    await assert.rejects(
+      deletePageContent(client, { pageId: "123", targetContent: "<p>nowhere near it</p>" }),
+      /target_content does not occur in the page body\./,
+    );
+    assert.equal(client.calls.filter((c) => c.op === "update").length, 0);
+  });
+
+  it("names the entity rewrite for a mis-encoded insertion anchor too", async () => {
+    const client = fakeClient({ ...basePage, body: "<h2>Ge&auml;ndert</h2><p>after</p>" });
+    await assert.rejects(
+      insertPageContent(client, { pageId: "123", content: "<p>new</p>", anchorContent: "<h2>Geändert</h2>", position: "after" }),
+      /anchor_content occurs in the page body only once HTML entities are decoded/,
+    );
+    assert.equal(client.calls.filter((c) => c.op === "update").length, 0);
+  });
+
   it("rejects a repeated deletion target without writing", async () => {
     const client = fakeClient({ ...basePage, body: "<p>remove</p><p>remove</p>" });
     await assert.rejects(

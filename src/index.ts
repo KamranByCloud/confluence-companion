@@ -185,7 +185,9 @@ async function startMcpServer(): Promise<void> {
       title: "Insert content next to a unique page fragment",
       description:
         "Inserts Storage XHTML immediately before or after one exact Storage-XHTML anchor. The anchor must occur exactly once; " +
-        "zero or multiple matches are rejected without modifying the page. Copy the anchor verbatim from the current page body.",
+        "zero or multiple matches are rejected without modifying the page. Copy the anchor verbatim from the stored page body, " +
+        "not from content written earlier: Confluence stores non-ASCII characters as named entities, so text sent as " +
+        "\"angehängt\" is stored as \"angeh&auml;ngt\".",
       inputSchema: {
         page_id: pageId,
         content: storageContent.describe("Storage XHTML to insert."),
@@ -211,7 +213,9 @@ async function startMcpServer(): Promise<void> {
       title: "Delete one unique page fragment",
       description:
         "Deletes one exact Storage-XHTML fragment from a page. The target must occur exactly once; zero or multiple matches are " +
-        "rejected without modifying the page. Copy the target verbatim from the current page body.",
+        "rejected without modifying the page. Copy the target verbatim from the stored page body, not from content written " +
+        "earlier: Confluence stores non-ASCII characters as named entities, so text sent as \"angehängt\" is stored as " +
+        "\"angeh&auml;ngt\".",
       inputSchema: { page_id: pageId, target_content: storageContent.describe("Exact existing Storage-XHTML fragment to delete."), version_message: z.string().optional() },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
     },

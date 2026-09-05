@@ -1,3 +1,4 @@
+import { decodeHTMLStrict } from "entities";
 import { XMLValidator } from "fast-xml-parser";
 
 import { ConfluenceClient, type Page } from "./confluence.js";
@@ -256,10 +257,26 @@ export async function prependPageContent(
   });
 }
 
+// Confluence rewrites non-ASCII characters into named entities when it stores a
+// page, so a paragraph written as "angehängt — äöü" comes back as
+// "angeh&auml;ngt &mdash; &auml;&ouml;&uuml;". A caller that reuses the fragment it
+// wrote, rather than one read back from the stored body, then matches nothing.
+// The fragment is not silently re-encoded and matched: this is the anchor of a
+// destructive edit, so the mismatch is reported and the caller re-reads.
+function entityMismatch(body: string, fragment: string): boolean {
+  return decodeHTMLStrict(body).includes(decodeHTMLStrict(fragment));
+}
+
 function singleOccurrence(body: string, fragment: string, name: string): number {
   const first = body.indexOf(fragment);
   if (first === -1) {
-    throw new ContentValidationError(`${name} does not occur in the page body.`);
+    throw new ContentValidationError(
+      entityMismatch(body, fragment)
+        ? `${name} occurs in the page body only once HTML entities are decoded. Confluence stores non-ASCII ` +
+          `characters as named entities, so a fragment written to the page differs from the stored one. Read the ` +
+          `page and copy the fragment from the stored body.`
+        : `${name} does not occur in the page body.`,
+    );
   }
   if (body.indexOf(fragment, first + fragment.length) !== -1) {
     throw new ContentValidationError(
