@@ -4,6 +4,9 @@
     "module": "Node16",
     "moduleResolution": "Node16",
     "lib": ["ES2023"],
+    // TypeScript 7 no longer discovers @types/* automatically; without this
+    // the Node globals and node: imports do not resolve.
+    "types": ["node"],
     "outDir": "dist",
     "rootDir": "src",
     "strict": true,

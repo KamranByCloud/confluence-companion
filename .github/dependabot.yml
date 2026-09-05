@@ -1,9 +1,13 @@
 version: 2
 
 updates:
-  # Runtime and build dependencies. Grouped so a quiet week produces one pull
-  # request rather than four; @modelcontextprotocol/sdk is the one worth
-  # reading, because the MCP protocol is still moving.
+  # Runtime and build dependencies.
+  #
+  # Only minor and patch updates are grouped. A major update is deliberately
+  # left ungrouped so it arrives as its own pull request with its own title.
+  # The first grouped run hid a TypeScript 5 -> 7 jump inside "the development
+  # group with 2 updates", which needed a tsconfig change to build at all.
+  # A major has to be visible before it is reviewed.
   - package-ecosystem: npm
     directory: "/"
     schedule:
@@ -12,11 +16,16 @@ updates:
     groups:
       production:
         dependency-type: production
+        update-types: ["minor", "patch"]
       development:
         dependency-type: development
+        update-types: ["minor", "patch"]
 
-  # Keeps the actions used by the CI workflow current.
+  # Keeps the actions used by the CI workflow current. Same rule: majors alone.
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
       interval: monthly
+    groups:
+      actions:
+        update-types: ["minor", "patch"]
