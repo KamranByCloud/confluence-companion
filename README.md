@@ -2,23 +2,49 @@
 
 [![CI](https://github.com/KamranByCloud/confluence-companion/actions/workflows/ci.yml/badge.svg)](https://github.com/KamranByCloud/confluence-companion/actions/workflows/ci.yml)
 
-Confluence Companion is a small MCP server that complements Atlassian Rovo
-with targeted Confluence Cloud capabilities that require direct use of the
-Confluence REST API.
+Confluence Companion is an MCP server for changing **part** of a Confluence
+Cloud page. It inserts, edits and removes text at a chosen position, and it
+works on the rows, columns and cells of a table. Everything else on the page is
+left exactly as it was.
 
-The project does not replace the official Atlassian Rovo MCP server. Rovo
-continues to provide search, Jira, Teamwork Graph, and its standard Confluence
-tools. Confluence Companion focuses on safe, precise operations that are not
-adequately covered there, starting with incremental page updates.
+That is the gap it fills. The official Atlassian Rovo MCP server stays
+connected alongside it and keeps covering search, Jira, Teamwork Graph and
+whole-page Confluence operations. What Rovo does not offer is a way to change
+one part of an existing page - append a paragraph, insert a row into a table,
+correct a single cell - without handing back the entire page body and hoping
+nothing else was altered on the way.
 
-## Initial goal
+## What it does
 
-Provide an MCP tool that safely appends content to an existing Confluence page:
+**Text in a page.** Append at the end, prepend at the beginning, insert
+immediately before or after a fragment you name, or delete a fragment. The
+anchor is matched literally and must occur exactly once, so nothing is ever
+guessed.
 
-1. Read the current page body and version through the Confluence REST API.
-2. Append validated content in the requested representation.
-3. Update the page with the next version number.
-4. Handle version conflicts without silently overwriting concurrent edits.
+**Tables in a page.** Read every table with its headers and plain-text cells,
+then insert or delete a row, insert a column, or replace the content of a
+single cell.
+
+Nine tools in total, listed in
+[Targeted page-content tools](#targeted-page-content-tools) and
+[Table tools](#table-tools) below.
+
+### The rules every write follows
+
+The Confluence REST API has no partial-update endpoint, so each change is a
+read-modify-write of the whole body. Three properties make that safe:
+
+1. **Concurrent edits are never overwritten.** The write goes to
+   `version + 1`, and Confluence rejects it if someone edited the page in the
+   meantime. The tool reports the conflict and leaves the page untouched
+   instead of retrying blindly.
+2. **Content is validated before anything is written.** Confluence accepts
+   malformed Storage markup with HTTP 200 and silently rewrites it into
+   something else, so relying on the API to reject bad input would corrupt
+   pages. Every fragment is checked as well-formed XHTML first.
+3. **The rest of the page is not touched.** Reading and writing happen in the
+   same representation, because converting between Storage format and Atlassian
+   Document Format rewrites parts of a page nobody asked to change.
 
 ## Authentication
 
@@ -282,6 +308,44 @@ Confluence Storage XHTML and their count must exactly match the table's columns.
 Atomically replacing a whole row is deliberately out of scope. It can be
 performed as a delete followed by an insert after re-reading the table.
 
+## Targeted page-content tools
+
+All targeted page-content tools operate on Confluence Storage XHTML. They read
+the current body, make one minimal string-level change, and write it back at the
+next page version. Invalid XHTML and concurrent edits are rejected without a
+write.
+
+1. `confluence_append_page_content` appends content at the end of a page. It
+   also supports ADF as described above.
+2. `confluence_prepend_page_content` inserts Storage XHTML at the beginning of
+   a page.
+3. `confluence_insert_page_content` inserts Storage XHTML immediately `before`
+   or `after` an exact `anchor_content` Storage-XHTML fragment.
+4. `confluence_delete_page_content` removes an exact `target_content`
+   Storage-XHTML fragment.
+
+The anchor and deletion target must occur **exactly once** in the current page
+body. No match or more than one match is an error and leaves the page untouched.
+This avoids guessing when identical text or markup appears in several places.
+Copy an appropriately large, unique fragment from the page body rather than
+using only a repeated word or a small inline element.
+
+For example, to insert a paragraph after one unique heading:
+
+```json
+{
+  "page_id": "123456789",
+  "anchor_content": "<h2>Release notes</h2>",
+  "position": "after",
+  "content": "<p>Deployment completed successfully.</p>"
+}
+```
+
+All supplied content, anchors, and deletion targets must be well-formed
+Storage XHTML. This permits formatted text, links, lists, macros, and other
+valid Storage-format blocks while preventing Confluence from silently repairing
+malformed markup.
+
 ## Tests
 
 ```bash
@@ -309,7 +373,7 @@ dependencies.
 
 ## Status
 
-Working append and table tools, installable as a single file on `PATH`, with
+Working append, targeted-content, and table tools, installable as a single file on `PATH`, with
 per-user credentials, a subcommand interface, unit tests, and live checks.
 Updating is `make update`.
 
