@@ -150,4 +150,43 @@ describe("Confluence storage tables", () => {
     );
     assert.equal(client.calls.length, 0);
   });
+  it("decodes named, numeric, and escaped entities in cell text exactly once", async () => {
+    // Ge&auml;ndert is what a real sandbox page returned through this projection.
+    const entityTable = `<table><thead><tr><th><p>A</p></th><th><p>B</p></th></tr></thead><tbody><tr><td><p>Ge&auml;ndert</p></td><td><p>&amp;lt; &amp; &#65;&#x42; &mdash; R&amp;D</p></td></tr></tbody></table>`;
+    const result = await getPageTables(fakeClient({ ...page, body: entityTable }), "123");
+    assert.deepEqual(result.tables[0].rows[0].cells, ["Geändert", "&lt; & AB — R&D"]);
+  });
+
+  it("does not invent a character from an entity that lost its semicolon", async () => {
+    const looseTable = `<table><thead><tr><th><p>A</p></th></tr></thead><tbody><tr><td><p>&amp;copy</p></td></tr></tbody></table>`;
+    const result = await getPageTables(fakeClient({ ...page, body: looseTable }), "123");
+    assert.equal(result.tables[0].rows[0].cells[0], "&copy");
+  });
+
+  it("keeps an unknown entity verbatim and renders a no-break space as a space", async () => {
+    const oddTable = `<table><thead><tr><th><p>A</p></th><th><p>B</p></th></tr></thead><tbody><tr><td><p>&bogus; x</p></td><td><p>a&nbsp;b</p></td></tr></tbody></table>`;
+    const result = await getPageTables(fakeClient({ ...page, body: oddTable }), "123");
+    assert.deepEqual(result.tables[0].rows[0].cells, ["&bogus; x", "a b"]);
+  });
+
+  it("survives an out-of-range numeric reference instead of throwing", async () => {
+    const badTable = `<table><thead><tr><th><p>A</p></th></tr></thead><tbody><tr><td><p>&#1114112;</p></td></tr></tbody></table>`;
+    const result = await getPageTables(fakeClient({ ...page, body: badTable }), "123");
+    assert.equal(result.tables[0].rows[0].cells.length, 1);
+  });
+
+  it("decodes entities in headers too, so expected_headers round-trips", async () => {
+    const headerTable = `<table><thead><tr><th><p>Ge&auml;ndert</p></th><th><p>B</p></th></tr></thead><tbody><tr><td><p>x</p></td><td><p>y</p></td></tr></tbody></table>`;
+    const client = fakeClient({ ...page, body: headerTable });
+    const result = await getPageTables(client, "123");
+    assert.deepEqual(result.tables[0].headers, ["Geändert", "B"]);
+    await deleteTableRow(client, {
+      pageId: "123",
+      expectedVersion: 4,
+      tableIndex: 0,
+      expectedHeaders: result.tables[0].headers,
+      rowIndex: 0,
+    });
+    assert.equal(client.calls.length, 1);
+  });
 });

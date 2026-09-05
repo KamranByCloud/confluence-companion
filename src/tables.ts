@@ -1,3 +1,5 @@
+import { decodeHTMLStrict } from "entities";
+
 import { DEFAULT_VERSION_MESSAGE, validateStorageContent } from "./append.js";
 import { ConfluenceClient, type Page } from "./confluence.js";
 
@@ -110,20 +112,21 @@ function cellsIn(row: Element, elements: readonly Element[]): Element[] {
   );
 }
 
+// Storage bodies carry HTML named entities beyond the five XML defines, so a
+// hand-kept list leaks the ones it misses: a real page returned "Ge&auml;ndert"
+// through this projection. A chain of replaces also decodes twice, turning the
+// escaped text "&amp;lt;" into "<" instead of "&lt;". One strict pass avoids
+// both; strict, so an entity that lost its semicolon is never invented into
+// a character.
 function plainText(markup: string): string {
-  return markup
-    .replace(/<br\s*\/?\s*>/gi, "\n")
-    .replace(/<[^>]+>/g, "")
-    .replace(/&nbsp;/gi, " ")
-    .replace(/&amp;/gi, "&")
-    .replace(/&lt;/gi, "<")
-    .replace(/&gt;/gi, ">")
-    .replace(/&quot;/gi, '"')
-    .replace(/&#(?:x([0-9a-f]+)|(\d+));/gi, (_match, hex, decimal) =>
-      String.fromCodePoint(Number.parseInt(hex || decimal, hex ? 16 : 10)),
-    )
-    .replace(/\s*\n\s*/g, "\n")
-    .trim();
+  const text = markup.replace(/<br\s*\/?\s*>/gi, "\n").replace(/<[^>]+>/g, "");
+  return (
+    decodeHTMLStrict(text)
+      // A no-break space is still a space to whoever reads this projection.
+      .replace(/\u00a0/g, " ")
+      .replace(/\s*\n\s*/g, "\n")
+      .trim()
+  );
 }
 
 function parseTables(markup: string, elements = parseElements(markup)): ParsedTable[] {
