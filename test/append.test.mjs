@@ -4,7 +4,10 @@ import { describe, it } from "node:test";
 import {
   appendPageContent,
   ContentValidationError,
+  deletePageContent,
   DEFAULT_VERSION_MESSAGE,
+  insertPageContent,
+  prependPageContent,
   validateStorageContent,
 } from "../dist/append.js";
 
@@ -187,5 +190,77 @@ describe("appendPageContent", () => {
       ContentValidationError,
     );
     assert.deepEqual(client.calls, [], "no request may be made for invalid content");
+  });
+});
+
+describe("targeted Storage content operations", () => {
+  it("prepends while preserving the existing body", async () => {
+    const client = fakeClient(basePage);
+    await prependPageContent(client, { pageId: "123", content: "<p>first</p>" });
+    assert.equal(client.calls.find((c) => c.op === "update").newBody, "<p>first</p>\n<p>existing</p>");
+  });
+
+  it("inserts immediately before a unique anchor", async () => {
+    const client = fakeClient({ ...basePage, body: "<p>before</p><h2>Anchor</h2><p>after</p>" });
+    await insertPageContent(client, {
+      pageId: "123",
+      content: "<p>new</p>",
+      anchorContent: "<h2>Anchor</h2>",
+      position: "before",
+    });
+    assert.equal(client.calls.find((c) => c.op === "update").newBody, "<p>before</p><p>new</p><h2>Anchor</h2><p>after</p>");
+  });
+
+  it("inserts immediately after a unique anchor", async () => {
+    const client = fakeClient({ ...basePage, body: "<h2>Anchor</h2><p>after</p>" });
+    await insertPageContent(client, {
+      pageId: "123",
+      content: "<p>new</p>",
+      anchorContent: "<h2>Anchor</h2>",
+      position: "after",
+    });
+    assert.equal(client.calls.find((c) => c.op === "update").newBody, "<h2>Anchor</h2><p>new</p><p>after</p>");
+  });
+
+  it("rejects a missing anchor without writing", async () => {
+    const client = fakeClient(basePage);
+    await assert.rejects(
+      insertPageContent(client, { pageId: "123", content: "<p>new</p>", anchorContent: "<h2>missing</h2>", position: "after" }),
+      /anchor_content does not occur/,
+    );
+    assert.equal(client.calls.filter((c) => c.op === "update").length, 0);
+  });
+
+  it("rejects a repeated anchor without writing", async () => {
+    const client = fakeClient({ ...basePage, body: "<h2>Anchor</h2><p>x</p><h2>Anchor</h2>" });
+    await assert.rejects(
+      insertPageContent(client, { pageId: "123", content: "<p>new</p>", anchorContent: "<h2>Anchor</h2>", position: "after" }),
+      /occurs more than once/,
+    );
+    assert.equal(client.calls.filter((c) => c.op === "update").length, 0);
+  });
+
+  it("deletes exactly one unique fragment", async () => {
+    const client = fakeClient({ ...basePage, body: "<p>keep</p><p>remove</p><p>keep too</p>" });
+    await deletePageContent(client, { pageId: "123", targetContent: "<p>remove</p>" });
+    assert.equal(client.calls.find((c) => c.op === "update").newBody, "<p>keep</p><p>keep too</p>");
+  });
+
+  it("rejects a repeated deletion target without writing", async () => {
+    const client = fakeClient({ ...basePage, body: "<p>remove</p><p>remove</p>" });
+    await assert.rejects(
+      deletePageContent(client, { pageId: "123", targetContent: "<p>remove</p>" }),
+      /occurs more than once/,
+    );
+    assert.equal(client.calls.filter((c) => c.op === "update").length, 0);
+  });
+
+  it("validates inserted content before reading", async () => {
+    const client = fakeClient(basePage);
+    await assert.rejects(
+      insertPageContent(client, { pageId: "123", content: "<p>broken", anchorContent: "<p>existing</p>", position: "after" }),
+      ContentValidationError,
+    );
+    assert.deepEqual(client.calls, []);
   });
 });

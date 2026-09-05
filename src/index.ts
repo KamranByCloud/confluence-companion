@@ -7,6 +7,9 @@ import {
   ADF,
   appendPageContent,
   ContentValidationError,
+  deletePageContent,
+  insertPageContent,
+  prependPageContent,
   STORAGE,
   SUPPORTED_REPRESENTATIONS,
 } from "./append.js";
@@ -151,6 +154,77 @@ async function startMcpServer(): Promise<void> {
   );
 
   const pageId = z.string().regex(/^\d+$/, "page_id must be the numeric Confluence page ID");
+  const storageContent = z
+    .string()
+    .min(1)
+    .describe("Well-formed Confluence Storage XHTML, for example '<p>Text</p>'.");
+
+  server.registerTool(
+    "confluence_prepend_page_content",
+    {
+      title: "Prepend content to a Confluence page",
+      description:
+        "Inserts Storage XHTML at the beginning of an existing page body. The existing body is otherwise preserved. " +
+        "The operation reads the page and writes the next version; concurrent edits are rejected as conflicts.",
+      inputSchema: { page_id: pageId, content: storageContent, version_message: z.string().optional() },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+    },
+    async ({ page_id, content, version_message }) => {
+      try {
+        const result = await prependPageContent(client, { pageId: page_id, content, versionMessage: version_message });
+        return { content: [{ type: "text", text: `Prepended content to "${result.page.title}".\nVersion: ${result.previousVersion} -> ${result.page.version}\nURL: ${result.page.webUrl}` }], structuredContent: { page_id: result.page.id, previous_version: result.previousVersion, version: result.page.version, url: result.page.webUrl } };
+      } catch (error) {
+        return { isError: true, content: [{ type: "text", text: toToolError(error) }] };
+      }
+    },
+  );
+
+  server.registerTool(
+    "confluence_insert_page_content",
+    {
+      title: "Insert content next to a unique page fragment",
+      description:
+        "Inserts Storage XHTML immediately before or after one exact Storage-XHTML anchor. The anchor must occur exactly once; " +
+        "zero or multiple matches are rejected without modifying the page. Copy the anchor verbatim from the current page body.",
+      inputSchema: {
+        page_id: pageId,
+        content: storageContent.describe("Storage XHTML to insert."),
+        anchor_content: storageContent.describe("Exact existing Storage-XHTML fragment that must occur exactly once."),
+        position: z.enum(["before", "after"]).describe("Whether to insert before or after anchor_content."),
+        version_message: z.string().optional(),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+    },
+    async ({ page_id, content, anchor_content, position, version_message }) => {
+      try {
+        const result = await insertPageContent(client, { pageId: page_id, content, anchorContent: anchor_content, position, versionMessage: version_message });
+        return { content: [{ type: "text", text: `Inserted content ${position} the unique anchor on "${result.page.title}".\nVersion: ${result.previousVersion} -> ${result.page.version}\nURL: ${result.page.webUrl}` }], structuredContent: { page_id: result.page.id, position, previous_version: result.previousVersion, version: result.page.version, url: result.page.webUrl } };
+      } catch (error) {
+        return { isError: true, content: [{ type: "text", text: toToolError(error) }] };
+      }
+    },
+  );
+
+  server.registerTool(
+    "confluence_delete_page_content",
+    {
+      title: "Delete one unique page fragment",
+      description:
+        "Deletes one exact Storage-XHTML fragment from a page. The target must occur exactly once; zero or multiple matches are " +
+        "rejected without modifying the page. Copy the target verbatim from the current page body.",
+      inputSchema: { page_id: pageId, target_content: storageContent.describe("Exact existing Storage-XHTML fragment to delete."), version_message: z.string().optional() },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
+    },
+    async ({ page_id, target_content, version_message }) => {
+      try {
+        const result = await deletePageContent(client, { pageId: page_id, targetContent: target_content, versionMessage: version_message });
+        return { content: [{ type: "text", text: `Deleted the unique target fragment from "${result.page.title}".\nVersion: ${result.previousVersion} -> ${result.page.version}\nURL: ${result.page.webUrl}` }], structuredContent: { page_id: result.page.id, previous_version: result.previousVersion, version: result.page.version, url: result.page.webUrl } };
+      } catch (error) {
+        return { isError: true, content: [{ type: "text", text: toToolError(error) }] };
+      }
+    },
+  );
+
   const tableIdentity = {
     table_index: z.number().int().min(0).describe("Zero-based table index returned by confluence_get_page_tables."),
     expected_headers: z

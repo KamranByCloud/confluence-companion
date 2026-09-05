@@ -10,12 +10,20 @@ export const SUPPORTED_REPRESENTATIONS = [STORAGE, ADF] as const;
 export type Representation = (typeof SUPPORTED_REPRESENTATIONS)[number];
 
 export const DEFAULT_VERSION_MESSAGE = "Appended content through Confluence Companion";
+export const DEFAULT_PREPEND_VERSION_MESSAGE = "Prepended content through Confluence Companion";
+export const DEFAULT_INSERT_VERSION_MESSAGE = "Inserted content through Confluence Companion";
+export const DEFAULT_DELETE_VERSION_MESSAGE = "Deleted content through Confluence Companion";
 
 export interface AppendResult {
   readonly page: Page;
   readonly previousVersion: number;
   readonly appendedChars: number;
   readonly appendedNodes: number | undefined;
+}
+
+export interface PageContentResult {
+  readonly page: Page;
+  readonly previousVersion: number;
 }
 
 export class ContentValidationError extends Error {}
@@ -203,4 +211,102 @@ export async function appendPageContent(
     appendedChars: args.content.length,
     appendedNodes: nodes?.length,
   };
+}
+
+function storageSeparator(left: string, right: string): string {
+  return left.length > 0 && right.length > 0 && !left.endsWith("\n") ? "\n" : "";
+}
+
+async function updateStoragePage(
+  client: ConfluenceClient,
+  args: {
+    pageId: string;
+    versionMessage: string | undefined;
+    defaultVersionMessage: string;
+    change: (body: string) => string;
+  },
+): Promise<PageContentResult> {
+  const page = await client.getPage(args.pageId, STORAGE);
+  if (page.representation !== STORAGE) {
+    throw new ContentValidationError(
+      `Page ${args.pageId} returned the '${page.representation}' representation, but '${STORAGE}' was requested.`,
+    );
+  }
+
+  const updated = await client.updatePageBody({
+    page,
+    newBody: args.change(page.body),
+    expectedVersion: page.version,
+    versionMessage: args.versionMessage?.trim() || args.defaultVersionMessage,
+  });
+  return { page: updated, previousVersion: page.version };
+}
+
+/** Inserts valid Storage XHTML before the existing page body. */
+export async function prependPageContent(
+  client: ConfluenceClient,
+  args: { pageId: string; content: string; versionMessage?: string | undefined },
+): Promise<PageContentResult> {
+  validateStorageContent(args.content);
+  return updateStoragePage(client, {
+    pageId: args.pageId,
+    versionMessage: args.versionMessage,
+    defaultVersionMessage: DEFAULT_PREPEND_VERSION_MESSAGE,
+    change: (body) => `${args.content}${storageSeparator(args.content, body)}${body}`,
+  });
+}
+
+function singleOccurrence(body: string, fragment: string, name: string): number {
+  const first = body.indexOf(fragment);
+  if (first === -1) {
+    throw new ContentValidationError(`${name} does not occur in the page body.`);
+  }
+  if (body.indexOf(fragment, first + fragment.length) !== -1) {
+    throw new ContentValidationError(
+      `${name} occurs more than once in the page body. Use a larger, unique Storage-XHTML fragment.`,
+    );
+  }
+  return first;
+}
+
+/** Inserts valid Storage XHTML immediately before or after one unique Storage-XHTML fragment. */
+export async function insertPageContent(
+  client: ConfluenceClient,
+  args: {
+    pageId: string;
+    content: string;
+    anchorContent: string;
+    position: "before" | "after";
+    versionMessage?: string | undefined;
+  },
+): Promise<PageContentResult> {
+  validateStorageContent(args.content);
+  validateStorageContent(args.anchorContent);
+  return updateStoragePage(client, {
+    pageId: args.pageId,
+    versionMessage: args.versionMessage,
+    defaultVersionMessage: DEFAULT_INSERT_VERSION_MESSAGE,
+    change: (body) => {
+      const index = singleOccurrence(body, args.anchorContent, "anchor_content");
+      const insertionPoint = args.position === "before" ? index : index + args.anchorContent.length;
+      return `${body.slice(0, insertionPoint)}${args.content}${body.slice(insertionPoint)}`;
+    },
+  });
+}
+
+/** Deletes exactly one unique Storage-XHTML fragment from a page body. */
+export async function deletePageContent(
+  client: ConfluenceClient,
+  args: { pageId: string; targetContent: string; versionMessage?: string | undefined },
+): Promise<PageContentResult> {
+  validateStorageContent(args.targetContent);
+  return updateStoragePage(client, {
+    pageId: args.pageId,
+    versionMessage: args.versionMessage,
+    defaultVersionMessage: DEFAULT_DELETE_VERSION_MESSAGE,
+    change: (body) => {
+      const index = singleOccurrence(body, args.targetContent, "target_content");
+      return `${body.slice(0, index)}${body.slice(index + args.targetContent.length)}`;
+    },
+  });
 }
