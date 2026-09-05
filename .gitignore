@@ -19,5 +19,7 @@ yarn-error.log*
 .vscode/
 *.swp
 
-# Local working notes: contain site URL, cloud ID and account details
+# Local working notes: contain site URL, cloud ID, account details and the
+# IDs of real Confluence test pages. Never published.
+.priv/
 NOTES.md

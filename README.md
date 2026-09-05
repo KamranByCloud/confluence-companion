@@ -1,5 +1,7 @@
 # Confluence Companion
 
+[![CI](https://github.com/KamranByCloud/confluence-companion/actions/workflows/ci.yml/badge.svg)](https://github.com/KamranByCloud/confluence-companion/actions/workflows/ci.yml)
+
 Confluence Companion is a small MCP server that complements Atlassian Rovo
 with targeted Confluence Cloud capabilities that require direct use of the
 Confluence REST API.
@@ -20,48 +22,125 @@ Provide an MCP tool that safely appends content to an existing Confluence page:
 
 ## Authentication
 
-The initial local setup uses a normal Atlassian API token via Basic
-Authentication. The token must not be committed. A future shared or remote
-deployment can use OAuth instead.
+A normal Atlassian API token over Basic Authentication, one per user. The token
+is never committed and never written into a client configuration; see
+[Installation](#installation). A shared or remote deployment would use OAuth
+instead, which changes only the base URL and the authorization header.
 
 ## Installation
+
+### Requirements
+
+Node.js 20 or newer on `PATH`, and git. `make` is optional; every step also
+works by calling `bin/install` directly.
+
+An Atlassian API token is needed, and it must be a **normal** one, not a scoped
+one. Scoped tokens address the Atlassian API gateway and fail against the site
+REST API with `401 scope does not match`. Create one at
+<https://id.atlassian.com/manage-profile/security/api-tokens>.
+
+### 1. Install the command
 
 ```bash
 git clone https://github.com/KamranByCloud/confluence-companion.git
 cd confluence-companion
-make install                  # or: bin/install
-confluence-companion init     # asks for site URL, email, and API token
+make install          # or: bin/install
 ```
 
-`make install` is a thin front for `bin/install`, which holds the logic so the
-same steps work without make. It installs **one** file, a bundle of the server
-and all its dependencies, to `~/.local/bin/confluence-companion`. Set `PREFIX`
-to install elsewhere.
+This bundles the server and all its dependencies into a single file and copies
+it to `~/.local/bin/confluence-companion`. Set `PREFIX` to install elsewhere:
 
-The file is copied, not linked, so the checkout is only a build tool: moving or
-deleting it afterwards does not break the installed command. Keep it to update:
+```bash
+PREFIX=/usr/local make install
+```
+
+The file is copied rather than linked, so the checkout is only a build tool.
+Moving or deleting it afterwards does not break the installed command, but keep
+it if you want to update in place.
+
+If the installer warns that the target directory is not on your `PATH`, add it
+to your shell profile and open a new shell:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+### 2. Store your credentials
+
+```bash
+confluence-companion init
+```
+
+`init` asks for the site URL, your account email, and the API token, hiding the
+token as you type it. It verifies the three against the live site **before**
+writing them, so a wrong token fails at the prompt rather than at the first
+tool call. They are stored in `~/.config/confluence-companion/config.env` at
+mode 600, outside every project.
+
+Each person uses their own token. Confluence then attributes every change
+correctly, and no write permission is ever handed out that would have to be
+revoked.
+
+### 3. Register the server with your assistant
+
+For Claude Code, once per machine:
+
+```bash
+claude mcp add -s user confluence-companion -- confluence-companion
+```
+
+For other clients, see [MCP client configuration](#mcp-client-configuration)
+below. Registering the server automatically for every installed assistant is
+not implemented yet.
+
+### Verify
+
+```bash
+confluence-companion config
+```
+
+It prints which source supplied each setting. It reports the token's length,
+never the token itself.
+
+A finished installation is two files:
+
+```text
+~/.local/bin/confluence-companion            the program, ~1.3 MB
+~/.config/confluence-companion/config.env    the credentials, mode 600
+```
+
+Two rather than one on purpose: they have different lifetimes and different
+permissions. The bundle carries the application code but not the JavaScript
+runtime, which is why Node must be installed.
+
+### Updating and removing
 
 ```bash
 make update      # git pull --ff-only, then reinstall
-make uninstall   # remove the command, keeping the credentials
+make uninstall   # remove the command; the credentials are kept
 ```
 
-Node.js 20 or newer must be on `PATH`; the bundle carries the application code
-but not the JavaScript runtime. So an installation is two files:
+`make uninstall` leaves `~/.config/confluence-companion/config.env` in place.
+Delete that file to remove the stored token as well.
 
-```text
-~/.local/bin/confluence-companion                  the program, ~1.3 MB
-~/.config/confluence-companion/config.env          the credentials, mode 600
+### Dev containers
+
+Inside a container no configuration file is needed. Pass the three variables
+through `remoteEnv`, since environment variables take precedence over the file:
+
+```json
+"remoteEnv": {
+  "ATLASSIAN_SITE_URL": "${localEnv:ATLASSIAN_SITE_URL}",
+  "ATLASSIAN_EMAIL": "${localEnv:ATLASSIAN_EMAIL}",
+  "ATLASSIAN_API_TOKEN": "${localEnv:ATLASSIAN_API_TOKEN}"
+}
 ```
 
-`init` stores the credentials in `~/.config/confluence-companion/config.env` at
-mode 600, outside every project, and verifies them against the site before
-writing. The token is entered once per machine and never appears in a
-repository or in a client configuration.
-
-Use a **normal** Atlassian API token, not a scoped one. Scoped tokens address
-the Atlassian API gateway and fail with `401 scope does not match` against the
-site REST API.
+Alternatively mount `~/.config/confluence-companion/config.env` read-only. For
+the command itself, either mount `~/.local/bin` or run `bin/install` from
+`postCreateCommand`; both are straightforward for a single file with no
+dependencies. With the variables set and no terminal attached, `init` stores
+them without prompting, which is the provisioning path.
 
 ## Configuration
 
@@ -75,12 +154,11 @@ Settings are resolved from two sources, in descending precedence:
 Environment variables always win, and the file never overrides a value that is
 already set. A `.env` inside the checkout is **not** read: it only ever worked
 for a checkout that was also the install, and it was the one mechanism that
-could carry a token to another machine by accident. `confluence-companion config` prints which source supplied each
-setting; it reports the token's length but never the token itself.
+could carry a token to another machine by accident.
 
-In a dev container no file is needed at all: pass the three variables through
-`remoteEnv`, or run `init` with them set and no terminal attached, and it
-stores them without prompting.
+`confluence-companion config` prints which source supplied each setting. It
+reports the token's length but never the token itself, so its output can be
+pasted into a bug report.
 
 ## Command line
 
@@ -244,3 +322,7 @@ command by hand as shown above.
 Architecture decisions, research, and verified API details are kept in local
 working notes that are not part of this repository, because they contain
 site-specific configuration.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
