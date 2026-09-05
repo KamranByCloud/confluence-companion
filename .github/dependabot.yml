@@ -1,0 +1,22 @@
+version: 2
+
+updates:
+  # Runtime and build dependencies. Grouped so a quiet week produces one pull
+  # request rather than four; @modelcontextprotocol/sdk is the one worth
+  # reading, because the MCP protocol is still moving.
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      production:
+        dependency-type: production
+      development:
+        dependency-type: development
+
+  # Keeps the actions used by the CI workflow current.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly

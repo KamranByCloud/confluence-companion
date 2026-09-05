@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The oldest supported version, and the newest. The CLI's hidden token
+        # prompt relies on a readline internal, so a new Node is worth testing
+        # against rather than assuming.
+        node: ["20", "22", "24"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+
+  install:
+    # The install path is the product, so it is exercised rather than assumed.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+      - run: npm ci
+      - name: Install into a temporary prefix
+        run: PREFIX="$RUNNER_TEMP/prefix" bin/install --no-deps
+      - name: The installed command must run and report missing credentials
+        run: |
+          bin="$RUNNER_TEMP/prefix/bin/confluence-companion"
+          "$bin" version
+          "$bin" help > /dev/null
+          if "$bin" config; then
+            echo "config must fail without credentials" >&2
+            exit 1
+          fi
