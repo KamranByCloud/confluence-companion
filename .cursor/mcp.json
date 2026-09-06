@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "k-playbook": {
+      "args": [
+        "mcp"
+      ],
+      "command": "/home/kleist/.local/bin/k-playbook"
+    }
+  }
+}

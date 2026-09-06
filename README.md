@@ -107,7 +107,33 @@ Each person uses their own token. Confluence then attributes every change
 correctly, and no write permission is ever handed out that would have to be
 revoked.
 
-### 3. Register the server with your assistant
+### 3. Register the server with OpenCode
+
+When OpenCode is installed, `bin/install` and `make install` register
+Confluence Companion globally with it automatically. The installer adds the
+following entry to the `mcp` object in
+`${XDG_CONFIG_HOME:-~/.config}/opencode/opencode.jsonc` (or `opencode.json` if
+that is the existing global configuration):
+
+```json
+"confluence-companion": {
+  "type": "local",
+  "command": ["confluence-companion"],
+  "enabled": true
+}
+```
+
+It never reads, copies, or writes Confluence credentials to OpenCode's
+configuration. Restart OpenCode after the installation; MCP configuration is
+loaded only at startup.
+
+To opt out, pass `--no-opencode`:
+
+```bash
+bin/install --no-opencode
+```
+
+### 4. Register the server with another assistant
 
 For Claude Code, once per machine:
 
@@ -398,11 +424,8 @@ Working append, targeted-content, and table tools, installable as a single file 
 per-user credentials, a subcommand interface, unit tests, and live checks.
 Updating is `make update`.
 
-Still open: registering the server with each assistant automatically. Claude
-Code, OpenCode, Cursor, and Codex each keep their MCP configuration in a
-different place, so `confluence-companion install` is planned to detect what is
-present and write the entries after confirmation. Until then, register the
-command by hand as shown above.
+OpenCode registration is automated by the installer. Other assistants still
+need to be registered manually as shown above.
 
 Architecture decisions, research, and verified API details are kept in local
 working notes that are not part of this repository, because they contain

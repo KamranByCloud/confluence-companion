@@ -7,8 +7,8 @@ NAME := confluence-companion
 .PHONY: help install dev-install bundle test update uninstall
 
 help:
-	@echo "make install      Build and install $(NAME) into $(PREFIX)/bin"
-	@echo "make dev-install  Reinstall without reinstalling dependencies"
+	@echo "make install      Build, install, and register $(NAME) with OpenCode"
+	@echo "make dev-install  Reinstall and register without reinstalling dependencies"
 	@echo "make update       git pull, then reinstall"
 	@echo "make bundle       Build the single-file bundle into dist/"
 	@echo "make test         Build and run the unit tests"

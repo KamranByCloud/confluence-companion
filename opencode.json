@@ -1,0 +1,22 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "instructions": [
+    "AGENTS.md"
+  ],
+  "mcp": {
+    "k-playbook": {
+      "command": [
+        "/home/kleist/.local/bin/k-playbook",
+        "mcp"
+      ],
+      "enabled": true,
+      "type": "local"
+    }
+  },
+  "references": {
+    "docs": {
+      "description": "Autoritative Projektdokumentation. Zuerst k-playbook-local/docs/README.md als Index lesen, bevor Code analysiert wird.",
+      "path": "./k-playbook-local/docs"
+    }
+  }
+}

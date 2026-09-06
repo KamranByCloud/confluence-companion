@@ -39,7 +39,7 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Install into a temporary prefix
-        run: PREFIX="$RUNNER_TEMP/prefix" bin/install --no-deps
+        run: PREFIX="$RUNNER_TEMP/prefix" bin/install --no-deps --no-opencode
       - name: The installed command must run and report missing credentials
         run: |
           bin="$RUNNER_TEMP/prefix/bin/confluence-companion"

@@ -1,0 +1,3 @@
+[submodule "k-playbook"]
+	path = k-playbook
+	url = https://github.com/kascada/k-playbook.git

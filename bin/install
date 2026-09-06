@@ -6,8 +6,9 @@
 # does not break the installed server. Credentials are not touched here; run
 # 'confluence-companion init' for those.
 #
-# Usage: bin/install [--no-deps]
+# Usage: bin/install [--no-deps] [--no-opencode]
 #   --no-deps   Skip 'npm ci'. For a rebuild during development.
+#   --no-opencode Skip registering the server with OpenCode.
 #   PREFIX      Install root, default ~/.local. The file lands in $PREFIX/bin.
 
 set -eu
@@ -20,11 +21,13 @@ REPO_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 MIN_NODE_MAJOR=20
 
 skip_deps=0
+skip_opencode=0
 for argument in "$@"; do
 	case "$argument" in
 	--no-deps) skip_deps=1 ;;
+	--no-opencode) skip_opencode=1 ;;
 	-h | --help)
-		sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'
+		sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'
 		exit 0
 		;;
 	*)
@@ -70,6 +73,17 @@ chmod 755 "$TARGET"
 installed_version=$("$TARGET" version) || fail "the installed file does not run."
 
 echo "Installed $NAME $installed_version to $TARGET"
+
+if [ "$skip_opencode" -eq 0 ] && command -v opencode >/dev/null 2>&1; then
+	# OpenCode has no CLI operation for local servers. Update only its mcp object
+	# and preserve the rest of the user's JSONC configuration.
+	if node "$REPO_DIR/bin/register-opencode.mjs" "$NAME"; then
+		echo "Registered $NAME with OpenCode. Restart OpenCode to load it."
+	else
+		echo "Warning: installed $NAME but could not register it with OpenCode." >&2
+		echo "Add $NAME to the mcp object in your OpenCode configuration." >&2
+	fi
+fi
 
 case ":${PATH}:" in
 *":$BIN_DIR:"*) ;;
