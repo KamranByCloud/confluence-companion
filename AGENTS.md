@@ -55,8 +55,11 @@ Confluence pages.
   calls it, so the steps stay usable without make.
 - Comments explain why a thing is the way it is, not what the line does. The
   measured traps in this codebase are commented for that reason.
-- `scripts/smoke.mjs` writes to real Confluence pages. It takes page IDs as
-  arguments and is never pointed at a page that matters.
+- `scripts/smoke.mjs` creates real Confluence pages, writes to them through
+  every tool, and deletes them again. It is run by hand, never from CI, and it
+  needs `SMOKE_SPACE_KEY` or `SMOKE_SPACE_ID` in the environment - the space is
+  never hard-coded, because a space or page id identifies the site it belongs
+  to and this repository is public.
 
 ## Layout
 

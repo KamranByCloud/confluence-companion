@@ -366,14 +366,27 @@ request shaping, error mapping, version-conflict translation, command-line
 parsing, the `init` flow, and configuration resolution including its precedence
 order and file permissions.
 
-`npm run smoke -- <storage-page-id> [adf-page-id] [table-page-id] [column-page-id]` is a
-separate end-to-end check that drives the server as a real MCP client. Every
-target is written to, so use scratch pages only. When a table page is supplied,
-it must contain exactly one six-column Storage table; the test inserts a uniquely
-marked final row and deletes it again, leaving its table rows unchanged while
-increasing the page version twice. When a column page is supplied, it must
-start with one two-column table and one data row; the test inserts a top row,
-adds a column, then inserts a row in the middle.
+`npm run smoke` is a separate end-to-end check that drives the server as a real
+MCP client against live Confluence. **Run it by hand; it is deliberately not
+wired into CI**, because it creates and deletes pages on your site.
+
+It needs no page IDs and no page prepared in advance. It creates its own pages,
+exercises every tool against them - append, prepend, insert and delete page
+content, and the five table tools, in both Storage and Atlassian Document
+Format - and deletes them again in a `finally` block, so a failing run cleans up
+after itself too. Pass `--keep` to leave the pages behind for inspection.
+
+Tell it where pages may be created:
+
+```sh
+SMOKE_SPACE_KEY=SCRATCH npm run smoke
+SMOKE_SPACE_ID=123456789 SMOKE_PARENT_ID=987654321 npm run smoke   # or by id
+```
+
+Alongside the happy paths it asserts what must be refused: malformed XHTML, a
+missing or repeated anchor, a fragment that differs from the stored one only in
+entity encoding, and - for every table write - a stale `expected_version` and
+changed `expected_headers`. The exit code is non-zero if any check fails.
 
 After changing the source, run `make dev-install` so a client picks the change
 up. It rebuilds the bundle and replaces the installed file without reinstalling
