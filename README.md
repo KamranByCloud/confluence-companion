@@ -428,8 +428,8 @@ OpenCode registration is automated by the installer. Other assistants still
 need to be registered manually as shown above.
 
 Architecture decisions, research, and verified API details are kept in local
-working notes that are not part of this repository, because they contain
-site-specific configuration.
+working notes under `k-playbook-local/docs/manual/`. That directory is not part
+of this repository, because the notes contain site-specific configuration.
 
 ## License
 

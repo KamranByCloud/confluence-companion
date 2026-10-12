@@ -23,3 +23,8 @@ yarn-error.log*
 # IDs of real Confluence test pages. Never published.
 .priv/
 NOTES.md
+
+# Working notes under docs/manual/ hold the site URL, cloud ID and account
+# details. AGENTS.md names them as required reading but not as public files,
+# and this repository is public.
+k-playbook-local/docs/manual/
